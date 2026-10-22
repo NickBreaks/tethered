@@ -1,0 +1,19 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tgz
+
+# Vitest browser mode artifacts
+__screenshots__/
+.vitest-attachments/
+
+# Local-only reports
+session-reports/
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+npm-debug.log*

@@ -1,0 +1,69 @@
+{
+  "name": "tethered",
+  "version": "0.1.0",
+  "description": "Run untrusted JavaScript in a browser Web Worker sandbox. Guest code reaches the host only through capabilities you register.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "sandbox",
+    "web-worker",
+    "untrusted-code",
+    "capabilities",
+    "javascript",
+    "wasm"
+  ],
+  "sideEffects": [
+    "./dist/js-worker.js"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./workers": {
+      "types": "./dist/workers/index.d.ts",
+      "default": "./dist/workers/index.js"
+    },
+    "./js-worker": {
+      "default": "./dist/js-worker.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/**/*.spec.*",
+    "docs",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepack": "npm run build",
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@jitl/quickjs-singlefile-browser-release-asyncify": "^0.32.0",
+    "quickjs-emscripten-core": "^0.32.0"
+  },
+  "devDependencies": {
+    "@vitest/browser": "4.1.12",
+    "@vitest/browser-playwright": "4.1.12",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.13.0",
+    "jsdom": "^27.4.0",
+    "playwright": "1.59.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "4.1.12",
+    "yaml": "^2.9.1"
+  }
+}
