@@ -20,7 +20,7 @@ const CORE_PUBLIC_ENTRY_ONLY = {
 
 export default tseslint.config(
   {
-    ignores: ['dist/', 'node_modules/', 'coverage/', '**/__screenshots__/'],
+    ignores: ['dist/', 'demo/dist/', 'node_modules/', 'coverage/', '**/__screenshots__/'],
   },
   {
     files: ['**/*.ts', '**/*.js', '**/*.mjs'],

@@ -15,5 +15,5 @@
     "types": ["vitest/globals"],
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "*.config.ts"]
+  "include": ["src/**/*.ts", "*.config.ts", "demo/**/*.ts"]
 }

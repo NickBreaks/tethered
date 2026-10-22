@@ -1,0 +1,63 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color-scheme: light dark;
+}
+body {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+main {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 2fr 1fr;
+}
+.output {
+  grid-column: 1 / -1;
+}
+textarea,
+#output,
+input[type='text'] {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+.examples,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+fieldset {
+  display: grid;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+#output {
+  list-style: none;
+  padding: 0.5rem;
+  min-height: 6rem;
+  border: 1px solid #8884;
+  white-space: pre-wrap;
+}
+#output .warn {
+  color: #b80;
+}
+#output .error {
+  color: #d33;
+}
+#output .result {
+  font-weight: bold;
+}
+#output .system {
+  opacity: 0.7;
+  font-style: italic;
+}
+@media (max-width: 40rem) {
+  main {
+    grid-template-columns: 1fr;
+  }
+}

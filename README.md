@@ -73,6 +73,7 @@ a patch release (0.x.y) will not. Every breaking change is listed in the
 - [Architecture](docs/architecture.md): entry points, source layout, how
   the worker boundary works.
 - [Development](docs/development.md): build, test, lint, release.
+- [Demo](demo/main.ts): a small vanilla TS playground (`npm run dev:demo`), deployed to GitHub Pages.
 
 ## License
 
