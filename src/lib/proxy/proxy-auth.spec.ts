@@ -47,8 +47,8 @@ describe('ProxyAuth', () => {
       service.setToken('first');
       expect(service.authHeader()).toBe('Bearer first');
 
-      // Mutate storage directly (bypassing setToken) to prove the
-      // service re-reads rather than reusing a cached value.
+      // Change storage directly (do not use setToken). This proves that
+      // the service reads again and does not use a cached value.
       sessionStorage.setItem('cors_proxy_auth_token', 'second');
       expect(service.authHeader()).toBe('Bearer second');
     });

@@ -1,25 +1,25 @@
 /**
  * Browser-level integration test for the FetchCapability / proxy
  * streaming path. A proxy enforces its own mid-stream size cap (see
- * docs/proxy-protocol.md); this suite covers the client side, because
+ * docs/proxy-protocol.md). This suite covers the client side, because
  * jsdom's fetch surface does not model premature stream closure the
  * same way real browsers do. This test runs in Playwright Chromium through
- * `vitest.integration.config.ts` and drives a real QuickJS VM via
+ * `vitest.integration.config.ts`. It drives a real QuickJS VM through
  * FetchCapability against a stub fetch that aborts mid-stream.
  *
  * Scenarios:
  *   1. Upstream responds 200 with a ReadableStream body whose reader
  *      throws after the first chunk. The client-side fetch observes
  *      a TypeError (`TypeError: Failed to fetch` or the Chromium
- *      equivalent). QuickJS should surface that as `fetch failed: ...`.
+ *      equivalent). QuickJS must show that as `fetch failed: ...`.
  *
  *   2. Upstream returns a large body (11 MB in a single chunk). The
- *      client receives it fully - verifies that the VM-side surface
- *      can consume an oversized response without crashing (the
- *      SERVER is what enforces the cap; here we just verify the
- *      client plumbing).
+ *      client receives all of it. This verifies that the VM-side
+ *      surface can consume an oversized response and not crash. The
+ *      SERVER enforces the cap. Here we only verify the client
+ *      plumbing.
  *
- * Run via: npm run test:integration
+ * Run with: npm run test:integration
  */
 
 import {
@@ -35,7 +35,7 @@ import type { SandboxCapability } from './capability.js';
 import type { ProxyAuth } from '../proxy/proxy-auth.js';
 
 // Injects the capability's guest API the way the worker does: bridge
-// functions relaying to invokeHost on the (test) main thread.
+// functions that relay to invokeHost on the (test) main thread.
 function injectCap(vm: QuickJSAsyncContext, cap: SandboxCapability): void {
   injectCapabilityBridge(
     vm,
@@ -94,9 +94,9 @@ describe('fetch-proxy-streaming integration', () => {
   });
 
   it('mid-stream abort surfaces as fetch failed: in QuickJS', async () => {
-    // Construct a ReadableStream whose reader yields one chunk and
-    // then throws on the second pull. In real browsers this surfaces
-    // as a TypeError when the consumer calls .text().
+    // Make a ReadableStream whose reader gives one chunk and then
+    // throws on the second pull. In real browsers, this shows as a
+    // TypeError when the consumer calls .text().
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode('first chunk'));

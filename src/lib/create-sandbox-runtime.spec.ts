@@ -122,7 +122,7 @@ describe('createSandboxRuntime', () => {
   });
 
   it('facade shows only the newest result when a JS run is superseded', async () => {
-    // Superseding replaces the worker, so each spawn gets its own fake.
+    // A supersede replaces the worker, so each new worker gets its own fake.
     const spawned: FakeJsWorker[] = [];
     jsWorkerFactory.mockImplementation(() => {
       const w = new FakeJsWorker();

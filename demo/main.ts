@@ -1,7 +1,7 @@
 // The tethered demo: one runtime, the four built-in capabilities, a fetch
 // allowlist, Run and Stop. Plain DOM, no framework.
 //
-// It imports the package source. An app would import 'tethered' and build
+// It imports the package source. A real app imports 'tethered' and builds
 // its worker factory from 'tethered/js-worker?url' (see docs/usage.md).
 import {
   createSandboxRuntime,
@@ -56,7 +56,7 @@ const toggles = {
   timer: el<HTMLInputElement>('cap-timer'),
 };
 
-// A Vite-recognised worker URL: bundled into its own chunk by the build.
+// A worker URL that Vite recognises. The build bundles it into its own chunk.
 const rt = createSandboxRuntime({
   jsWorkerFactory: () =>
     new Worker(new URL('../src/js-worker.ts', import.meta.url), { type: 'module' }),
@@ -73,8 +73,9 @@ function allowHosts(): string[] {
 }
 
 /**
- * Applies the toggles and the allowlist. Registering a capability again
- * replaces it (disabled), so the fetch policy is rebuilt before each run.
+ * Applies the toggles and the allowlist. A second registration of a
+ * capability replaces it, and the new one is disabled. Thus the fetch
+ * policy is rebuilt before each run.
  * Returns an error message for an invalid allowlist entry.
  */
 function applySettings(): string | null {

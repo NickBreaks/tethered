@@ -4,10 +4,10 @@ import { playwright } from '@vitest/browser-playwright';
 /**
  * Real-browser integration suite: Playwright Chromium (headless), a real
  * `Worker` running the worker script, driven through the public API.
- * Kept apart from the jsdom unit suite because it needs a browser and
+ * It is separate from the jsdom unit suite, because it needs a browser and
  * longer budgets.
  *
- * Run via:  npm run test:integration
+ * Run with:  npm run test:integration
  */
 export default defineConfig({
   server: {

@@ -3,12 +3,13 @@
  *
  *   1. `tsc -p tsconfig.build.json` emits the core (`.`) and the
  *      `./workers` entry as ES modules with declarations.
- *   2. Declarations no public entry reaches are removed. They belong to
- *      worker internals (the engine host and the capability bridge) and
- *      would name the engine; the engine stays an implementation detail.
- *   3. esbuild bundles the worker script (`src/js-worker.ts`, with the
- *      engine and its WASM inlined) into the self-contained
- *      `dist/js-worker.js`, the `./js-worker` export. The default worker
+ *   2. The build removes the declarations that no public entry reaches.
+ *      They belong to worker internals (the engine host and the capability
+ *      bridge), and they name the engine. The engine stays an
+ *      implementation detail.
+ *   3. esbuild bundles the worker script (`src/js-worker.ts`) into the
+ *      self-contained `dist/js-worker.js`, the `./js-worker` export. The
+ *      bundle inlines the engine and its WASM. The default worker
  *      factory in `dist/workers/` points at it with
  *      `new URL('../js-worker.js', import.meta.url)`.
  *   4. scripts/verify-build.mjs checks the result.

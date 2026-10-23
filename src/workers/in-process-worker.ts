@@ -6,17 +6,19 @@ type MessageListener = (event: MessageEvent<JsWorkerToMainMsg>) => void;
 /**
  * Worker-shaped shim that hosts the real JS engine on the calling
  * thread. `createJsWorkerFactory({ allowInProcess: true })` falls back
- * to this when `Worker` is unavailable (jsdom/SSR test environments), so
- * JsRunner keeps working there with identical protocol semantics. It
- * gives no isolation, so it is opt-in and outside the security claim.
+ * to this when `Worker` is not available (jsdom/SSR test environments).
+ * Thus JsRunner continues to work there, with identical protocol
+ * semantics. It gives no isolation, so it is opt-in and outside the
+ * security claim.
  *
- * Limitations vs a real worker: terminate() only detaches the message
- * channel — it cannot preempt a hot synchronous loop (the in-worker
- * timeout still ends those), and execution shares the caller's thread.
+ * Limitations compared to a real worker:
+ *  - terminate() only detaches the message channel. It cannot preempt a
+ *    hot synchronous loop. The in-worker timeout still ends those loops.
+ *  - Execution shares the caller's thread.
  *
- * worker-host is imported dynamically so the engine (embedded
- * wasm) stays out of the main bundle for browser consumers, who only
- * ever load it inside the real worker chunk.
+ * worker-host is imported dynamically. Thus the engine (embedded wasm)
+ * stays out of the main bundle for browser consumers. They load the
+ * engine only inside the real worker chunk.
  */
 export class InProcessJsWorker {
   #host: JsWorkerHost | null = null;
@@ -43,8 +45,8 @@ export class InProcessJsWorker {
       return;
     }
     const host = this.#host;
-    // Deliver asynchronously to mimic a real worker's message queue and
-    // avoid re-entrancy into the caller's stack.
+    // Deliver asynchronously, as the message queue of a real worker does.
+    // This prevents re-entrancy into the caller's stack.
     queueMicrotask(() => {
       if (!this.#terminated) host.handleMessage(msg);
     });

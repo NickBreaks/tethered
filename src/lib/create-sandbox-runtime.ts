@@ -11,17 +11,17 @@ export interface SandboxRuntimeOptions {
    */
   corsProxyUrl?: string | null;
   /**
-   * Spawns the JS worker (required — there is no hidden default, so
-   * the core never bundles one). `defaultJsWorkerFactory` from
-   * `tethered/workers` spawns the bundled worker; where there
-   * is no global `Worker` (jsdom/SSR) it fails unless built with
+   * Starts the JS worker. This option is required. There is no hidden
+   * default, so the core never bundles a worker. `defaultJsWorkerFactory`
+   * from `tethered/workers` starts the bundled worker. If there is no
+   * global `Worker` (jsdom/SSR), it fails, unless you build it with
    * `createJsWorkerFactory({ allowInProcess: true })`.
    */
   jsWorkerFactory: () => Worker;
   /**
    * What `js.execute()` does while a JS run is in flight: `'supersede'`
-   * (default: take over, settling the older run as superseded) or
-   * `'queue'` (run after it settles).
+   * (default: take over, and settle the older run as superseded) or
+   * `'queue'` (run after the older run settles).
    */
   jsConcurrency?: JsRunnerOptions['concurrency'];
   /** Replace the JS worker every N runs. Off by default. */
@@ -33,8 +33,8 @@ export interface SandboxRuntimeOptions {
   /** Per-run time limit for the JS runner (ms). Defaults to 5000. */
   timeoutMs?: number;
   /**
-   * Extra runners for the facade, keyed by mode (`js` is built in and
-   * reserved). Each is reachable via `facade.setMode(key)`. The caller
+   * Extra runners for the facade, keyed by mode. `js` is built in and
+   * reserved. Each is reachable through `facade.setMode(key)`. The caller
    * keeps ownership: `dispose()` does not dispose them.
    */
   runners?: Readonly<Record<string, CodeRunner>>;
@@ -54,8 +54,9 @@ export interface SandboxRuntime {
 }
 
 /**
- * Builds a runtime. Nothing is spawned here: call `js.initialize()` when
- * the worker should boot; it rejects if the worker fails to load.
+ * Builds a runtime. This function does not start a worker. Call
+ * `js.initialize()` when you want the worker to boot. That call rejects
+ * if the worker fails to load.
  * Throws if `options.runners` has a `js` key or `initialMode` is unknown.
  */
 export function createSandboxRuntime(options: SandboxRuntimeOptions): SandboxRuntime {

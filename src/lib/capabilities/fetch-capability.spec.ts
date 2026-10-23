@@ -12,7 +12,7 @@ import type { SandboxCapability } from './capability.js';
 import type { ProxyAuth } from '../proxy/proxy-auth.js';
 
 // Injects the capability's guest API the way the worker does: bridge
-// functions relaying to invokeHost on the (test) main thread.
+// functions that relay to invokeHost on the (test) main thread.
 function injectCap(vm: QuickJSAsyncContext, cap: SandboxCapability): void {
   injectCapabilityBridge(
     vm,
@@ -85,7 +85,7 @@ describe('FetchCapability', () => {
   }
 
   // With newAsyncifiedFunction, fetch() appears synchronous to QuickJS.
-  // No await needed — the asyncify mechanism transparently suspends/resumes WASM.
+  // An await is not necessary. The asyncify mechanism transparently suspends/resumes WASM.
 
   it('should fetch and return status', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('OK', { status: 200, statusText: 'OK' }));
@@ -196,7 +196,7 @@ describe('FetchCapability', () => {
 
   // ---------------------------------------------------------------
   // Thenable response: .then() chaining support so LLM agents
-  // can use standard fetch patterns (e.g. fetch(url).then(r => r.text()))
+  // can use standard fetch patterns (for example, fetch(url).then(r => r.text()))
   // ---------------------------------------------------------------
 
   it('should support .then() on response for text extraction', async () => {
@@ -497,8 +497,8 @@ describe('FetchCapability', () => {
   });
 
   it('A-23: response body via .text() does not contain token', async () => {
-    // Upstream returns innocuous body. Token should not leak via the
-    // proxy response path.
+    // Upstream returns a harmless body. The token must not leak through
+    // the proxy response path.
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response('safe body data with no secrets here', { status: 200 }),
     );
@@ -560,8 +560,9 @@ describe('FetchCapability', () => {
   });
 
   // ---------------------------------------------------------------
-  // Host allow/deny policy (A36–A42). Checked before any routing, so a
-  // rejected URL never reaches globalThis.fetch (direct or proxy).
+  // Host allow/deny policy (A36–A42). The capability checks it before any
+  // routing, so a rejected URL never reaches globalThis.fetch (direct or
+  // proxy).
   // ---------------------------------------------------------------
 
   // Runs fetch(url) in the guest; returns the error message, or

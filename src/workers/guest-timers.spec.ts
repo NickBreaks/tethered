@@ -7,7 +7,7 @@ import {
 import variant from '@jitl/quickjs-singlefile-browser-release-asyncify';
 import { GuestTimers } from './guest-timers.js';
 
-// Engine-side timer globals, relocated from the core TimerCapability (A23):
+// Engine-side timer globals, moved from the core TimerCapability (A23):
 // the capability is now a descriptor and the worker owns this implementation.
 describe('GuestTimers', () => {
   let module: QuickJSAsyncWASMModule;

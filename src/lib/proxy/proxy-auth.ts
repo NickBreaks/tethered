@@ -1,27 +1,27 @@
 import { createValue } from '../shared/readable-value.js';
 
-/** The slice of ProxyAuth that capabilities need (lets adapters pass a wrapper). */
+/** The part of ProxyAuth that capabilities need. Adapters can use it to pass a wrapper. */
 export type ProxyAuthLike = Pick<ProxyAuth, 'proxyBase' | 'authHeader' | 'invalidate'>;
 
 /**
  * Owns the CORS proxy bearer token.
  *
- * `corsProxyUrl` tri-state (preserved from the legacy
- * `environment.corsProxyUrl` field — see proxyBase tests A-01..A-03):
- *  - `''`   — dev default; same-origin `/proxy/fetch` via the dev-server proxy.
+ * `corsProxyUrl` has three states. They come from the legacy
+ * `environment.corsProxyUrl` field (see proxyBase tests A-01..A-03):
+ *  - `''`   — dev default; same-origin `/proxy/fetch` through the dev-server proxy.
  *  - `null` — proxy disabled.
  *  - any absolute URL string — that URL is the proxy base.
  *
  * Invariants:
  *  - `authHeader()` reads sessionStorage on every call. There is no
- *    private `_cachedToken` field and no reactive value over the token -
- *    a stale cache would leak tokens between tabs or through browser
+ *    private `_cachedToken` field and no reactive value over the token.
+ *    A stale cache can leak tokens between tabs or through browser
  *    storage listeners.
  *  - Only sessionStorage is ever referenced. localStorage is forbidden
  *    so the token never outlives the browser tab.
- *  - `proxyBase()` uses an explicit null/undefined check so the empty
- *    string (dev mode, same-origin `/proxy/fetch`) is NOT collapsed
- *    to null (Spec Mod #1).
+ *  - `proxyBase()` uses an explicit null/undefined check. Thus the empty
+ *    string (dev mode, same-origin `/proxy/fetch`) does NOT become null
+ *    (Spec Mod #1).
  *  - `setToken()` trims whitespace before storing (Spec Mod #6 / U-01).
  */
 export class ProxyAuth {

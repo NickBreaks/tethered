@@ -7,22 +7,23 @@ export interface CapabilityStubInfo {
 
 /**
  * A sandbox capability. Guest code runs in a web worker and never sees
- * the capability object itself; the capability only describes its guest
- * API and services calls to it:
+ * the capability object. The capability only describes its guest API
+ * and services the calls to it:
  *
  * - Host-backed (storage/disk/fetch): implement `invokeHost`. The worker
- *   installs one guest function per `stubInfo` method/global; each guest
- *   call suspends the guest, is relayed to the main thread and lands here
- *   with plain structured-clone args. Throw to raise an error in the
- *   guest. `setupScript` optionally wraps the raw bridge functions in
- *   guest JS.
+ *   installs one guest function per `stubInfo` method/global. Each guest
+ *   call suspends the guest. The worker relays the call to the main
+ *   thread, and the call arrives here with plain structured-clone args.
+ *   Throw to raise an error in the guest. Optionally, `setupScript` wraps
+ *   the raw bridge functions in guest JS.
  *
- * - Built into the runner (timer): no `invokeHost`. The worker provides
- *   the guest API itself; the capability is just its toggle.
+ * - Built into the runner (timer): no `invokeHost`. The worker supplies
+ *   the guest API. The capability is only its toggle.
  *
- * Without `invokeHost` (and not built in) a capability is a pure toggle
- * that installs nothing. When a capability is disabled, the worker
- * installs throwing stubs shaped by `stubInfo` either way.
+ * A capability that has no `invokeHost` and is not built in is only a
+ * toggle. It installs nothing. For all capabilities, when a capability is
+ * disabled, the worker installs stubs that throw. `stubInfo` sets the
+ * shape of these stubs.
  */
 export interface SandboxCapability {
   readonly name: string;

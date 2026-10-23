@@ -8,7 +8,7 @@ import {
 import type { CodeRunner, ExecuteOptions } from './shared/code-runner.js';
 import type { ExecutionResult, OutputEntry } from './shared/sandbox-types.js';
 
-/** The runners a facade dispatches to, keyed by mode (e.g. `{ js, ts }`). */
+/** The runners a facade dispatches to, keyed by mode (for example, `{ js, ts }`). */
 export type FacadeRunners = Readonly<Record<string, CodeRunner>>;
 
 /**
@@ -49,7 +49,7 @@ export class RuntimeFacade {
     this.mode = this.#mode.asReadonly();
 
     // Re-expose the active runner's state. Every runner is a source, so a
-    // change on any of them (or on the mode) re-evaluates.
+    // change on a runner or on the mode causes a new evaluation.
     const all = Object.values(this.#runners);
     const active = () => this.#runners[this.#mode.get()];
     const sources = (pick: (r: CodeRunner) => ReadableValue<unknown>) => [
@@ -58,8 +58,8 @@ export class RuntimeFacade {
     ];
     this.ready = derived(sources((r) => r.ready), () => active().ready.get());
     this.isRunning = derived(sources((r) => r.isRunning), () => active().isRunning.get());
-    // The runner's own message wins; a bare rejection of an initialize()
-    // the facade started is the fallback.
+    // The runner's own message has priority. The fallback is a bare
+    // rejection of an initialize() that the facade started.
     this.initError = derived(
       [...sources((r) => r.initError), this.#initFailures],
       () => active().initError.get() ?? this.#initFailures.get()[this.#mode.get()] ?? null,
@@ -87,15 +87,19 @@ export class RuntimeFacade {
   }
 
   /**
-   * Switches the active runner. Setting the current mode is a no-op, and
-   * an unknown mode throws without changing anything. Otherwise it aborts
-   * the previously active runner, replaces the output with a single
-   * "Switched to X mode" system entry, and — when it switches to a runner
-   * that is not ready — calls that runner's `initialize()`, unless an
-   * earlier facade-started one is still in flight or resolved. A failure
-   * (a rejection or a synchronous throw) surfaces through `initError`, and
-   * the next switch to that mode retries. The initial mode's runner is
-   * never initialized here: whoever builds the facade boots it.
+   * Switches the active runner. If you set the current mode, nothing
+   * occurs. An unknown mode throws and changes nothing. For other modes,
+   * this method:
+   *  - aborts the previously active runner.
+   *  - replaces the output with a single "Switched to X mode" system entry.
+   *  - calls `initialize()` on the new runner if it is not ready. It does
+   *    not do this when an earlier facade-started call is still in flight
+   *    or resolved.
+   *
+   * A failure (a rejection or a synchronous throw) shows in `initError`.
+   * The next switch to that mode retries. This method never initializes
+   * the runner of the initial mode. The code that builds the facade boots
+   * that runner.
    */
   setMode(mode: string): void {
     this.#check(mode);
@@ -133,8 +137,8 @@ export class RuntimeFacade {
 
     const result = await (options ? runner.execute(code, options) : runner.execute(code));
 
-    // Supersession: if another execute() started after us (or the mode
-    // changed meanwhile), discard our result so stale output doesn't leak.
+    // Supersession: if another execute() started after this one, or the
+    // mode changed, discard this result. Then stale output does not leak.
     if (myRunId !== this.#runIdCounter || this.#mode.get() !== modeAtStart) {
       return result;
     }

@@ -20,10 +20,11 @@ interface TimerEntry {
 
 /**
  * Guest `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
- * and the virtual-time event loop that fires them after the script's
- * top-level eval. Worker-internal: the public `TimerCapability` only
- * registers and toggles the globals; when it is enabled for a run the
- * host installs one of these into the run's VM, and cleans it up after.
+ * and the virtual-time event loop that runs them after the script's
+ * top-level eval. Worker-internal. The public `TimerCapability` only
+ * registers and toggles the globals. When it is enabled for a run, the
+ * host installs one of these into the run's VM. After the run, the host
+ * cleans it up.
  */
 export class GuestTimers {
   private timers = new Map<number, TimerEntry>();
@@ -41,7 +42,7 @@ export class GuestTimers {
         `(msg => new TypeError(msg))(${JSON.stringify(msg)})`,
       );
       if (evalResult.error) {
-        // Should not happen — fall back to generic error
+        // This is not expected. Fall back to a generic error
         evalResult.error.dispose();
         return vm.newError(msg);
       }
@@ -142,7 +143,7 @@ export class GuestTimers {
     };
 
     const flushMicrotasks = (): boolean => {
-      // Returns true if an error occurred (caller should bail).
+      // Returns true if an error occurred (the caller must stop).
       const jobResult = runtime.executePendingJobs();
       const errHandle = jobResult.error;
       if (errHandle) {
@@ -176,7 +177,7 @@ export class GuestTimers {
       }
       due.sort((a, b) => (a.dueTime - b.dueTime) || (a.id - b.id));
 
-      // 4. If no due timers, advance the virtual clock or exit
+      // 4. If no timers are due, advance the virtual clock or exit
       if (due.length === 0) {
         // Find next due time among non-cleared entries
         let next: number | null = null;
@@ -185,11 +186,11 @@ export class GuestTimers {
           if (next === null || e.dueTime < next) next = e.dueTime;
         }
         if (next === null) {
-          // No timers remain; check pending jobs once more then exit
+          // No timers remain. Check pending jobs one more time, then exit
           if (!runtime.hasPendingJob()) {
             return { timedOut: false, hadError };
           }
-          // Pending jobs exist but no timers; loop will flush them on next iteration
+          // Pending jobs exist but no timers. The loop flushes them on the next iteration
           continue;
         }
         if (next > this.virtualNow) {
@@ -200,7 +201,7 @@ export class GuestTimers {
 
       // 5. Fire due callbacks
       for (const entry of due) {
-        // Check cleared again in case a previous callback cancelled it
+        // Check cleared again, because a previous callback can cancel it
         if (entry.cleared) continue;
 
         const callResult = vm.callFunction(entry.callback, vm.undefined);
@@ -250,7 +251,7 @@ export class GuestTimers {
         try {
           entry.callback.dispose();
         } catch {
-          // Ignore — handle may have been disposed by VM cleanup
+          // Ignore. VM cleanup can dispose the handle first
         }
       }
     }

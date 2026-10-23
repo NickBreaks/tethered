@@ -1,11 +1,11 @@
 /**
  * Real-browser integration suite for the JS runner: a real Chromium
  * `Worker` running the bundled QuickJS worker (`defaultJsWorkerFactory`),
- * driven through the public `JsRunner`. Covers the cases the in-process
- * host cannot: terminate-based abort of a hot synchronous loop, and
- * superseding a run that is suspended on a host capability call.
+ * driven through the public `JsRunner`. Covers the cases that the
+ * in-process host cannot cover: terminate-based abort of a hot synchronous
+ * loop, and supersede of a run that is suspended on a host capability call.
  *
- * Run via: npm run test:integration. Under the jsdom unit suite (no `Worker`)
+ * Run with: npm run test:integration. Under the jsdom unit suite (no `Worker`)
  * the suite is skipped.
  */
 import { CapabilityStore, JsRunner, type SandboxCapability } from '../index.js';

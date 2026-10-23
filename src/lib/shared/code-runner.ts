@@ -7,7 +7,8 @@ export interface ExecuteOptions {
   timeoutMs?: number;
   /**
    * Names the caller; readable as `activeTag` while the run is in flight
-   * (e.g. so a host capability can tell who started it). Defaults to `''`.
+   * (for example, so a host capability can find who started it). Defaults
+   * to `''`.
    */
   tag?: string;
 }
@@ -27,9 +28,10 @@ export interface CodeRunner {
   execute(code: string, options?: ExecuteOptions): Promise<ExecutionResult>;
   abort(): Promise<void>;
   /**
-   * Streams a started run's output: `fn` is called for each entry as it is
-   * appended to the run's `output`, so it sees the same entries in the
-   * same order the result will carry. Returns an unsubscribe function.
+   * Streams the output of a started run. `fn` is called for each entry
+   * when the entry is added to the run's `output`. Thus `fn` gets the same
+   * entries, in the same order, as the result. Returns an unsubscribe
+   * function.
    */
   onOutput(fn: (entry: OutputEntry) => void): () => void;
 }

@@ -1,7 +1,7 @@
 /**
- * Zero-dependency event stream — the stateless sibling of ReadableValue,
- * for things that happen (an output entry, a run starting) rather than
- * values that are. `subscribe(fn)` returns an unsubscribe function;
+ * Zero-dependency event stream. It is the stateless sibling of
+ * ReadableValue: it is for events (an output entry, the start of a run),
+ * not for values. `subscribe(fn)` returns an unsubscribe function.
  * `emit()` calls every subscriber synchronously, in subscription order.
  */
 export interface Emitter<T> {
@@ -16,8 +16,9 @@ export function createEmitter<T>(): Emitter<T> {
   const subscribers = new Set<{ fn: (event: T) => void }>();
   return {
     emit: (event) => {
-      // Snapshot so (un)subscribing during notification is safe. A throwing
-      // subscriber must not starve the rest; its error is rethrown async.
+      // Make a snapshot, so that a subscribe or unsubscribe during
+      // notification is safe. A subscriber that throws must not stop the
+      // others. Its error is thrown again asynchronously.
       for (const sub of [...subscribers]) {
         if (!subscribers.has(sub)) continue;
         try {

@@ -4,16 +4,17 @@ import type { CapabilityStubInfo } from '../index.js';
 export interface CapabilityBridgeSpec {
   name: string;
   stub: CapabilityStubInfo;
-  /** Guest JS evaluated after bridge injection (e.g. fetch's response wrapper). */
+  /** Guest JS evaluated after bridge injection (for example, fetch's response wrapper). */
   setupScript?: string;
 }
 
 /**
- * Injects the guest-facing API of a host-backed capability into a VM:
- * one asyncified function per stubInfo method/global, each relaying its
- * dumped args to `invoke` and marshaling the plain result back into VM
- * handles. Used by the worker (relaying over postMessage to the main
- * thread) and by capability specs (calling invokeHost directly).
+ * Injects the guest-facing API of a host-backed capability into a VM. It
+ * injects one asyncified function per stubInfo method/global. Each
+ * function relays its dumped args to `invoke` and marshals the plain
+ * result back into VM handles. The worker uses this function and relays
+ * over postMessage to the main thread. Capability specs also use it and
+ * call invokeHost directly.
  */
 export function injectCapabilityBridge(
   vm: QuickJSAsyncContext,
@@ -23,7 +24,7 @@ export function injectCapabilityBridge(
   const makeBridgeFn = (fnName: string): QuickJSHandle =>
     vm.newAsyncifiedFunction(fnName, async (...handles: QuickJSHandle[]) => {
       // The VM is suspended during the async relay (Asyncify), so only
-      // handle creation is allowed here — no vm.evalCode.
+      // handle creation is allowed here. Do not use vm.evalCode.
       const args = handles.map((h) => vm.dump(h));
       try {
         const value = await invoke(fnName, args);
@@ -67,8 +68,8 @@ export function injectCapabilityBridge(
 /**
  * Builds a VM handle from a plain structured-clone value. Safe to call
  * while the VM is asyncify-suspended (handle creation only, no eval).
- * Static handles (undefined/null/true/false) have no-op dispose, so
- * callers may uniformly dispose the result.
+ * Static handles (undefined/null/true/false) have a no-op dispose. Thus
+ * callers can dispose the result in all cases.
  */
 function marshal(vm: QuickJSAsyncContext, value: unknown): QuickJSHandle {
   if (value === undefined) return vm.undefined;

@@ -2,23 +2,25 @@ import { InProcessJsWorker } from './in-process-worker.js';
 
 export interface JsWorkerFactoryOptions {
   /**
-   * Where `Worker` doesn't exist (jsdom/SSR test environments), host the
-   * engine in-process with `InProcessJsWorker` instead of failing. Off by
-   * default: the in-process host shares the caller's thread, so it gives
-   * none of a real Worker's isolation and cannot stop a hot synchronous
-   * loop. Ignored when `Worker` exists — a real Worker is always used.
+   * If `Worker` does not exist (jsdom/SSR test environments), host the
+   * engine in-process with `InProcessJsWorker`, and do not fail. Off by
+   * default. The in-process host shares the caller's thread. Thus it gives
+   * none of the isolation of a real Worker, and it cannot stop a hot
+   * synchronous loop. Ignored when `Worker` exists: then a real Worker is
+   * always used.
    */
   allowInProcess?: boolean;
 }
 
 /**
- * Builds a JS worker factory that spawns the bundled worker script
- * (`tethered/js-worker`, `dist/js-worker.js`) as a module Worker. Without a global `Worker` it throws (so `initialize()` rejects
- * and `initError` is set) unless `allowInProcess` is `true`. Bundlers that
- * can't follow `new URL(..., import.meta.url)` inside a dependency (e.g.
- * Vite's dep pre-bundling) should pass their own factory built on the
- * `tethered/js-worker` export instead — and then needn't
- * import this entry at all.
+ * Builds a JS worker factory that starts the bundled worker script
+ * (`tethered/js-worker`, `dist/js-worker.js`) as a module Worker. Without
+ * a global `Worker`, it throws, unless `allowInProcess` is `true`. Then
+ * `initialize()` rejects and `initError` is set. Some bundlers cannot
+ * follow `new URL(..., import.meta.url)` inside a dependency (for
+ * example, Vite's dep pre-bundling). With these bundlers, pass your own
+ * factory built on the `tethered/js-worker` export. Then you do not need
+ * to import this entry.
  */
 export function createJsWorkerFactory(options: JsWorkerFactoryOptions = {}): () => Worker {
   const allowInProcess = options.allowInProcess === true;

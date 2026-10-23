@@ -1,8 +1,8 @@
 import type { SandboxCapability } from './capability.js';
 import { TimerCapability } from './timer-capability.js';
 
-// The guest-side timers (setTimeout & co. and the drain loop) are runner
-// internals now; see src/workers/guest-timers.spec.ts.
+// The guest-side timers (setTimeout, the related globals and the drain
+// loop) are now runner internals. See src/workers/guest-timers.spec.ts.
 describe('TimerCapability', () => {
   it('should expose name, description, and stubInfo with 4 globals', () => {
     const cap = new TimerCapability();

@@ -1,103 +1,114 @@
 # Run lifecycle
 
-Per-run options, run-in-flight state, output streaming, the JS runner's
-queueing and worker-recycling options, and how runners boot.
+This page tells about:
+
+- the options for each run;
+- the state of the run in flight;
+- how output streams;
+- the JS runner options for the queue and for worker replacement;
+- how runners boot.
 
 ## Every runner (`CodeRunner`)
 
 | Member | What it does |
 | --- | --- |
-| `execute(code, { timeoutMs?, tag? })` | `timeoutMs` overrides the runner's `timeoutMs` for this run only. `tag` (default `''`) names the caller. `facade.execute` / `facade.run` forward the same options. |
-| `activeTag: ReadableValue<string \| null>` | The tag of the run in flight, `null` between runs. Host capabilities can read it inside `invokeHost()` to tell who started the run. |
-| `onOutput(fn) => unsubscribe` | Called for each entry as it is appended to a started run's `output`, so it sees the same entries, in the same order, as the result. |
+| `execute(code, { timeoutMs?, tag? })` | `timeoutMs` overrides the `timeoutMs` of the runner for this run only. `tag` (default `''`) names the caller. `facade.execute` / `facade.run` send the same options to the runner. |
+| `activeTag: ReadableValue<string \| null>` | The tag of the run in flight. It is `null` between runs. Host capabilities can read it inside `invokeHost()` to find who started the run. |
+| `onOutput(fn) => unsubscribe` | The runner calls `fn` for each entry when it adds the entry to the `output` of a started run. Thus, `fn` gets the same entries as the result, in the same order. |
 
-How each runner streams:
+How each runner streams output:
 
-- **JS**: the `[… enabled]` system entry when the run starts, each
-  `console.*` entry as the worker posts it, and the result/error entry
-  last. Abort and timeout entries are streamed too.
-- **Your own runners** (registered through `runners`) stream however
-  they implement `onOutput`.
+- **JS**: first, the `[… enabled]` system entry when the run starts.
+  Then each `console.*` entry when the worker posts it. Last, the
+  result/error entry. The runner also streams abort and timeout entries.
+- **Your own runners** (registered through `runners`) stream output as
+  their `onOutput` implementation does.
 
 ## JS runner options
 
-Pass these to `new JsRunner(registry, { … })`, or flat to
-`createSandboxRuntime()`:
+Give these options to `new JsRunner(registry, { … })`, or give them at
+the top level to `createSandboxRuntime()`:
 
 | `JsRunnerOptions` | `createSandboxRuntime` | Default | Effect |
 | --- | --- | --- | --- |
-| `concurrency` | `jsConcurrency` | `'supersede'` | `'supersede'`: an overlapping run takes over on a fresh worker (see below). `'queue'`: each run starts after every earlier one has settled (finished, failed, timed out or aborted). |
+| `concurrency` | `jsConcurrency` | `'supersede'` | `'supersede'`: an overlapping run replaces the current run, on a fresh worker (refer to the subsequent text). `'queue'`: each run starts after all earlier runs settle (finish, fail, time out or abort). |
 | `recycleAfterRuns` | `jsRecycleAfterRuns` | off | After N runs on one worker, the next run first replaces the worker. |
-| `recoverExhaustion` | `jsRecoverExhaustion` | `true` | A run that fails with `/out of memory\|setup failed\|InternalError/i` (not a timeout) replaces the worker and is retried once. If the retry fails the same way, the worker is replaced again and that failure is returned. |
+| `recoverExhaustion` | `jsRecoverExhaustion` | `true` | If a run fails with `/out of memory\|setup failed\|InternalError/i` (not a timeout), the runner replaces the worker and tries the run one more time. If the second try fails in the same way, the runner replaces the worker again and returns that failure. |
 
 JS-only subscriptions and state:
 
-- `onRun(fn)`: `{ tag, startTime, timeoutMs }` when a run starts, `null`
-  when it ends (finished, timed out or aborted). An exhaustion retry
-  reports a second start/end pair.
-- `onRecycle(fn)`: called with `'periodic'` (`recycleAfterRuns`) or the
-  run's error message (exhaustion) when the worker is replaced. Abort and
-  timeout respawns do not fire it.
-- `queued: ReadableValue<number>`: runs waiting behind the one in flight
-  (always 0 in `'supersede'` mode).
+- `onRun(fn)`: gets `{ tag, startTime, timeoutMs }` when a run starts,
+  and `null` when it ends (finished, timed out or aborted). A second try
+  after memory exhaustion gives a second start/end pair.
+- `onRecycle(fn)`: when the runner replaces the worker, it calls `fn` with
+  `'periodic'` (`recycleAfterRuns`) or with the error message of the run
+  (exhaustion). When abort or a timeout starts a new worker, the runner
+  does not call `fn`.
+- `queued: ReadableValue<number>`: the number of runs that wait after the
+  run in flight. It is always 0 in `'supersede'` mode.
 
-`abort()` stops only the run in flight. In `'queue'` mode, queued runs
-then start on the respawned worker.
+`abort()` stops only the run in flight. In `'queue'` mode, the queued runs
+then start on the new worker.
 
 **Supersede.** An `execute()` that overlaps a run settles the older run
-at once with `success: false`, `timedOut: false` and
-`error: 'Execution superseded by a newer run.'`, with its output so far
-plus that system entry. Its backstop is cleared, its capabilities are
-cleaned up, and `onRun(null)` fires for it before the new run's start.
-Its worker is then terminated and respawned (`ready` is `false` while the
-new one boots, `isRunning` stays `true` and `activeTag` is `null`, since
-the tag is set only once the new run is posted), and the new run starts
-on the fresh worker. That also frees a worker stuck in a hot loop or suspended
-on a host call that never returns: the engine allows one suspension at a
-time, so the old worker could not serve the new run's host calls. Late
-messages from the old worker or for the old run are ignored, and a host
-call still pending for the old run is never answered into the new one.
-An `execute()` that is itself superseded while the fresh worker boots
-settles the same way without ever starting. Use `'queue'` when callers
-can overlap and each run must finish.
+immediately. The older run gets `success: false`, `timedOut: false` and
+`error: 'Execution superseded by a newer run.'`. Its output is the output
+until that time, plus that system entry. The runner clears the backstop of
+the older run and cleans up its capabilities. `onRun(null)` fires for the
+older run before the new run starts.
+
+Then the runner terminates the worker and starts a new worker. While the
+new worker boots, `ready` is `false`, `isRunning` stays `true`, and
+`activeTag` is `null`. The runner sets the tag only when it posts the new
+run. The new run starts on the fresh worker. This also releases a worker
+that is stuck in a hot loop. It also releases a worker that is suspended
+on a host call that never returns. The engine allows only one suspension
+at a time. Thus, the old worker cannot do the host calls of the new run.
+
+The runner ignores late messages from the old worker or for the old run.
+It never sends the answer to a pending host call of the old run into the
+new run. If a newer run supersedes an `execute()` while the fresh worker
+boots, that `execute()` settles in the same way, and never starts. Use
+`'queue'` when callers can overlap and each run must finish.
 
 ## Initialization
 
-`initialize()` on the JS runner spawns the worker through the factory you
-pass and resolves once the worker posts a valid `ready`. It rejects when
-the worker fails to start:
+`initialize()` on the JS runner uses the factory that you give to start
+the worker. It resolves when the worker posts a valid `ready`. It rejects
+when the worker does not start:
 
 - the factory throws;
-- the worker fires `error` (for example, the browser refused to load the
+- the worker fires `error` (for example, the browser did not load the
   script);
 - the worker posts an init error;
 - no `ready` arrives within `bootTimeoutMs` (`JsRunner`) /
   `jsBootTimeoutMs` (`createSandboxRuntime`), default 30000 ms.
 
-The message is also left in `initError`, the failed worker is terminated,
-and a later `initialize()` spawns a fresh one. `dispose()` during a boot
-clears the boot timer, and the pending `initialize()` resolves, as it does
-on a disposed runner. Fire-and-forget callers should still catch the
-rejection.
+The runner also keeps the message in `initError`, and terminates the
+failed worker. A later `initialize()` starts a fresh worker. If you call
+`dispose()` during a boot, it clears the boot timer. Then the pending
+`initialize()` resolves, as it does on a disposed runner. Callers that do
+not wait for the result must still catch the rejection.
 
-**No in-process fallback by default.** Without a global `Worker` (jsdom,
-SSR), `defaultJsWorkerFactory` throws, so `initialize()` rejects with a
-message naming `allowInProcess`. Tests that need the real engine there opt
-in with `createJsWorkerFactory({ allowInProcess: true })` from
-`tethered/workers`, which runs the same worker code on the calling thread. That
-mode has no isolation and is outside the
-[threat model](threat-model.md). With `Worker` present a real worker is
-always used.
+**No in-process fallback by default.** If there is no global `Worker`
+(jsdom, SSR), `defaultJsWorkerFactory` throws. Then `initialize()` rejects
+with a message that names `allowInProcess`. If a test must have the real
+engine there, it can opt in with
+`createJsWorkerFactory({ allowInProcess: true })` from `tethered/workers`.
+This runs the same worker code on the calling thread. That mode has no
+isolation, and the [threat model](threat-model.md) does not include it.
+If `Worker` is available, the runner always uses a real worker.
 
 **Lazy init through the facade.** `RuntimeFacade.setMode(key)` calls
-`initialize()` on a runner that is not ready, unless a facade-started
-call is in flight or has succeeded. A failure (rejection or synchronous
-throw) never escapes `setMode()`: it shows in the facade's `initError`
-until the runner becomes ready, and the next switch to that mode retries.
-The facade never initializes the initial mode's runner; boot it yourself
+`initialize()` on a runner that is not ready. It does not do this if an
+`initialize()` call from the facade is in flight or was successful. A
+failure (rejection or synchronous throw) never goes out of `setMode()`.
+The `initError` of the facade shows the failure until the runner is
+ready. The next change to that mode tries again. The facade never
+initializes the runner of the initial mode. Boot it yourself
 (`await rt.js.initialize()`).
 
-**Superseding respawns.** In `'supersede'` mode each superseded run costs
-a worker boot (see above), so the boot timeout and `initError` also apply
-to the fresh worker: if it fails to boot, the new run settles as not
-initialized and `isRunning` clears.
+**Superseding respawns.** In `'supersede'` mode, each superseded run
+causes a worker boot (refer to the text above). Thus, the boot timeout and
+`initError` also apply to the fresh worker. If the fresh worker does not
+boot, the new run settles as not initialized, and `isRunning` clears.

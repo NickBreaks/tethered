@@ -5,8 +5,8 @@ import { defineConfig } from 'vite';
  * `npm run preview:demo`.
  *
  * No COOP/COEP headers: the worker uses no SharedArrayBuffer, so the page
- * needn't be cross-origin isolated, and serving it locally without them
- * matches GitHub Pages, which can't set response headers.
+ * does not need cross-origin isolation. Also, a local server without these
+ * headers matches GitHub Pages, which cannot set response headers.
  */
 export default defineConfig({
   // Relative to the working directory: the npm scripts run from the package root.

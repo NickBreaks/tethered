@@ -15,7 +15,7 @@ import { injectCapabilityBridge } from '../../workers/capability-bridge.js';
 import type { SandboxCapability } from './capability.js';
 
 // Injects the capability's guest API the way the worker does: bridge
-// functions relaying to invokeHost on the (test) main thread.
+// functions that relay to invokeHost on the (test) main thread.
 function injectCap(vm: QuickJSAsyncContext, cap: SandboxCapability): void {
   injectCapabilityBridge(
     vm,
@@ -115,7 +115,7 @@ describe(
         throw new Error('Expected success');
       }
 
-      // Dispose and recreate context (simulating new execution)
+      // Dispose and recreate context (this simulates a new execution)
       try {
         vm.dispose();
       } catch {}

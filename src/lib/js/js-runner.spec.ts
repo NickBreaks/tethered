@@ -636,7 +636,7 @@ describe('JsRunner', () => {
     // T25: State isolation across executions
     it('should not see timers from a previous execute() call', async () => {
       registry.setEnabled('timer', true);
-      // First execution: register a timer that doesn't fire (cleared immediately)
+      // First execution: register a timer that does not fire (cleared immediately)
       const r1 = await service.execute(`
         const id = setTimeout(() => console.log('first'), 0);
         clearTimeout(id);
@@ -658,7 +658,7 @@ describe('JsRunner', () => {
       const id1 = (r1.output.find((e) => e.type === 'result')?.content) ?? '';
       const r2 = await service.execute(`setTimeout(() => {}, 100)`);
       const id2 = (r2.output.find((e) => e.type === 'result')?.content) ?? '';
-      // Both should be the same first ID (1), demonstrating fresh state
+      // Both must be the same first ID (1). This shows a fresh state
       expect(id1).toBe(id2);
       expect(id1).toBe('1');
     });
@@ -737,8 +737,8 @@ describe('JsRunner', () => {
     it('isRunning settles back to false after a run', async () => {
       expect(service.isRunning.get()).toBe(false);
       const p = service.execute('1 + 1');
-      // running is set synchronously by execute; microtask queue may still
-      // be empty when we read, so just await the promise.
+      // execute sets running synchronously. The microtask queue can still
+      // be empty when we read, so only await the promise.
       await p;
       expect(service.isRunning.get()).toBe(false);
     });
@@ -758,8 +758,8 @@ describe('JsRunner', () => {
       service.timeoutMs = 1000;
       try {
         const p = service.execute('while (true) {}');
-        // Give the asyncify pump a tick to start driving the WASM loop,
-        // then request abort.
+        // Give the asyncify pump one tick to start the WASM loop. Then
+        // request abort.
         await new Promise((r) => setTimeout(r, 20));
         await service.abort();
         const result = await p;
@@ -771,9 +771,9 @@ describe('JsRunner', () => {
   });
 
   // Worker-based abort: abort() terminates the worker and respawns it,
-  // so it must end runs the old in-thread cancel flag never could —
-  // most importantly runs suspended on a pending host capability call
-  // (the "abort during fetch" case).
+  // so it must end runs that the old in-thread cancel flag could not end.
+  // The most important are runs suspended on a pending host capability
+  // call (the "abort during fetch" case).
   describe('Worker-based abort (terminate + respawn)', () => {
     const hangCap: SandboxCapability = {
       name: 'hang',

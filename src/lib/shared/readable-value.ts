@@ -3,9 +3,9 @@
  *
  * Semantics (useSyncExternalStore-compatible):
  *  - `get()` returns the current value synchronously.
- *  - `subscribe(fn)` does NOT fire immediately; `fn` runs synchronously on
- *    every later change, and only when the value actually changes
- *    (`Object.is`). It returns an unsubscribe function.
+ *  - `subscribe(fn)` does NOT call `fn` immediately. `fn` runs
+ *    synchronously on every later change, and only when the value really
+ *    changes (`Object.is`). It returns an unsubscribe function.
  *
  * Framework adapters bridge it to their own primitive (a signal, a store,
  * a `useSyncExternalStore` hook).
@@ -32,8 +32,8 @@ export interface DerivedValue<T> extends ReadableValue<T> {
 
 export function createValue<T>(initial: T): WritableValue<T> {
   let current = initial;
-  // One wrapper object per subscribe() call, so subscribing the same
-  // function twice yields two independent subscriptions.
+  // One wrapper object per subscribe() call. Thus, if you subscribe the
+  // same function two times, you get two independent subscriptions.
   const subscribers = new Set<{ fn: (value: T) => void }>();
 
   const readonly: ReadableValue<T> = {
@@ -50,8 +50,9 @@ export function createValue<T>(initial: T): WritableValue<T> {
   const set = (value: T): void => {
     if (Object.is(value, current)) return;
     current = value;
-    // Snapshot so (un)subscribing during notification is safe. A throwing
-    // subscriber must not starve the rest; its error is rethrown async.
+    // Make a snapshot, so that a subscribe or unsubscribe during
+    // notification is safe. A subscriber that throws must not stop the
+    // others. Its error is thrown again asynchronously.
     for (const sub of [...subscribers]) {
       if (!subscribers.has(sub)) continue;
       try {

@@ -1,17 +1,17 @@
 # tethered
 
-Run untrusted JavaScript in the browser, on a tether: guest code runs in a
-Web Worker and can reach the host only through the capabilities you
-register.
+Run untrusted JavaScript in the browser, on a tether. Guest code runs in a
+Web Worker. It can get access to the host only through the capabilities
+that you register.
 
 - Guest code runs in a sandboxed JS engine (WebAssembly) inside a
   dedicated `Worker`, off the main thread.
-- Side effects (fetch, storage, a virtual disk, timers, or your own) are
-  opt-in capabilities, checked on the host for every call.
-- Every run has a time limit and a memory limit; `abort()` stops even a
+- Side effects are opt-in capabilities: fetch, storage, a virtual disk,
+  timers, or your own. The host checks each capability for every call.
+- Every run has a time limit and a memory limit. `abort()` stops even a
   `while (true) {}`.
-- The core is framework-free and dependency-free; the engine stays an
-  implementation detail of the worker.
+- The core has no framework and no dependencies. The engine is an
+  internal part of the worker only.
 
 ## Install
 
@@ -31,7 +31,7 @@ const rt = createSandboxRuntime({
 rt.registry.register(new FetchCapability(rt.auth, { allowHosts: ['api.example.com'] }));
 rt.registry.setEnabled('fetch', true);
 
-await rt.js.initialize(); // boots the worker; rejects if it fails to load
+await rt.js.initialize(); // starts the worker; rejects if the worker does not load
 const result = await rt.facade.execute(`
   const res = fetch('https://api.example.com/items'); // host calls look synchronous to the guest
   console.log(res.status);
@@ -49,16 +49,17 @@ rt.dispose();
 > enabled for that run. Each run is bounded by its time limit and a
 > per-run memory limit. The claim covers the built-in JS runner only.
 
-The in-process fallback (for jsdom/SSR tests), custom runners and custom
-capabilities are outside the claim. Read the
-[threat model](docs/threat-model.md) before exposing a capability, and
-report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+The claim does not include the in-process fallback (for jsdom/SSR tests),
+custom runners or custom capabilities. Read the
+[threat model](docs/threat-model.md) before you give guest code access to a
+capability. Report vulnerabilities privately as
+[SECURITY.md](SECURITY.md) tells you.
 
 ## Stability
 
-tethered is 0.x. Until 1.0, a minor release (0.x.0) may break the API and
-a patch release (0.x.y) will not. Every breaking change is listed in the
-[changelog](CHANGELOG.md).
+tethered is 0.x. Until 1.0, a minor release (0.x.0) can break the API. A
+patch release (0.x.y) will not break the API. The
+[changelog](CHANGELOG.md) lists every breaking change.
 
 ## Docs
 
@@ -70,10 +71,12 @@ a patch release (0.x.y) will not. Every breaking change is listed in the
   and out of scope, each capability's attack surface.
 - [Proxy protocol](docs/proxy-protocol.md): how `FetchCapability` talks to
   a CORS proxy, and what a proxy must do.
-- [Architecture](docs/architecture.md): entry points, source layout, how
-  the worker boundary works.
+- [Architecture](docs/architecture.md): entry points, source layout, and
+  the function of the worker boundary.
 - [Development](docs/development.md): build, test, lint, release.
-- [Demo](demo/main.ts): a small vanilla TS playground (`npm run dev:demo`), deployed to GitHub Pages.
+- [Writing style](docs/writing-style.md): the ASD-STE100 rules for docs
+  and comments.
+- [Demo](demo/main.ts): a small vanilla TS playground (`npm run dev:demo`). It is on GitHub Pages.
 
 ## License
 

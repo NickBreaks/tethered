@@ -3,25 +3,25 @@ import type { ProxyAuthLike } from '../proxy/proxy-auth.js';
 
 /**
  * Host policy for {@link FetchCapability}. Entries are hostnames
- * (`example.com`) or a `*.` wildcard (`*.example.com`), which matches
- * every subdomain of `example.com` but not `example.com` itself (list
- * both to allow both). A wildcard needs at least two labels (`*.com` is
- * refused) and cannot cover an IP address. No scheme, port, path or
- * userinfo, and no empty labels (`.example.com`, `a..b`). Entries are
- * lowercased, trimmed and stripped of one trailing dot; an invalid entry,
- * a non-string entry or a list that is not an array throws a `TypeError`
- * at construction.
+ * (`example.com`) or a `*.` wildcard (`*.example.com`). A wildcard matches
+ * every subdomain of `example.com` but not `example.com` itself. To allow
+ * both, list both. A wildcard must have a minimum of two labels (`*.com`
+ * is refused) and cannot cover an IP address. Entries must not have a
+ * scheme, port, path, userinfo or empty labels (`.example.com`, `a..b`).
+ * The constructor lowercases and trims each entry and removes one
+ * trailing dot. It throws a `TypeError` for an invalid entry, a
+ * non-string entry or a list that is not an array.
  *
- * Either list makes fetch http(s)-only, but an allowed host is reachable
+ * Either list makes fetch http(s)-only. But an allowed host is reachable
  * on any port and over plain `http`. `denyHosts` is not a security
- * boundary (an IP literal or a CNAME reaches the same server under
- * another name): use `allowHosts` to confine the guest.
+ * boundary, because an IP literal or a CNAME reaches the same server
+ * under another name. Use `allowHosts` to confine the guest.
  */
 export interface FetchCapabilityOptions {
   /**
-   * When set, only these hosts may be fetched (an empty list allows
-   * nothing). Relative and same-origin URLs are checked against the
-   * page's hostname.
+   * When set, fetch can get only these hosts. An empty list allows no
+   * host. Relative and same-origin URLs are checked against the hostname
+   * of the page.
    */
   readonly allowHosts?: readonly string[];
   /** These hosts are always refused, even when they match `allowHosts`. */
@@ -40,33 +40,37 @@ interface HostList {
  * proxy when one is configured.
  *
  * Routing decision (Flow C):
- *   1. If proxyAuth.proxyBase() is null -> proxy disabled; call
+ *   1. If proxyAuth.proxyBase() is null, the proxy is disabled. Call
  *      globalThis.fetch directly (AC #49 direct-fetch fallback).
  *   2. If the request URL resolves to the same origin as the current
- *      page, call globalThis.fetch directly regardless of proxyBase.
- *   3. Otherwise read proxyAuth.authHeader() and POST the request to
- *      `${base}/proxy/fetch` with the destination URL/method/headers/body
- *      in the JSON body. A missing token invalidates the service and
- *      throws the locked Spec Mod #5 error string so the modal opens.
+ *      page, call globalThis.fetch directly. Ignore proxyBase.
+ *   3. Otherwise, read proxyAuth.authHeader(). Then POST the request to
+ *      `${base}/proxy/fetch`, with the destination URL/method/headers/body
+ *      in the JSON body. If the token is missing, the capability
+ *      invalidates the service and throws the locked Spec Mod #5 error
+ *      string. This error string opens the modal.
  *   4. A 401 response from the proxy invalidates the token and throws
  *      a "CORS proxy rejected the token" error.
  *
- * Host policy: with `allowHosts` and/or `denyHosts`, every request URL
- * is parsed with the WHATWG URL parser (relative URLs against the page)
- * and checked BEFORE any routing above, so a refused URL never reaches
- * globalThis.fetch, the proxy or the auth header. Only http(s) URLs pass;
- * the hostname is compared exactly (never by substring); deny wins.
- * The lists are copied at construction and never reach the guest. With
- * neither option the URL is not inspected at all.
+ * Host policy: with `allowHosts`, `denyHosts` or both, the capability
+ * parses each request URL with the WHATWG URL parser. It resolves
+ * relative URLs against the page. It checks the URL BEFORE the routing
+ * above, so a refused URL never reaches globalThis.fetch, the proxy or
+ * the auth header. Only http(s) URLs pass. The check compares the full
+ * hostname, never a substring. If both lists match, deny wins. The
+ * constructor copies the lists, and the lists never reach the guest.
+ * With neither option, the capability does not examine the URL.
  *
- * Token-isolation invariant: the auth header is read INSIDE invokeHost on
- * the main thread. It never crosses the worker boundary, is never turned
- * into a VM value, and is never concatenated into an error message. The
- * exfiltration specs in fetch-capability.spec.ts regression-test this.
+ * Token-isolation invariant: the auth header is read only INSIDE
+ * invokeHost, on the main thread. It never crosses the worker boundary.
+ * It never becomes a VM value, and it is never part of an error message.
+ * The exfiltration specs in fetch-capability.spec.ts are regression tests
+ * for this.
  *
- * The worker injects the raw bridge as the global `fetch`; setupScript
- * then wraps it into a thenable response object so .then() chaining,
- * sync access (resp.text()), and await all work as agents/LLMs expect.
+ * The worker injects the raw bridge as the global `fetch`. Then
+ * setupScript wraps it into a thenable response object. Thus .then()
+ * chaining, sync access (resp.text()) and await all work as agents/LLMs
+ * expect.
  */
 export class FetchCapability implements SandboxCapability {
   readonly name = 'fetch';
@@ -115,8 +119,8 @@ export class FetchCapability implements SandboxCapability {
     if (options === null || typeof options !== 'object') {
       throw new TypeError('FetchCapability options must be an object.');
     }
-    // Only an absent list means "no policy": anything else that is not an
-    // array (null, a string) throws rather than silently failing open.
+    // Only an absent list means "no policy". Any other value that is not an
+    // array (null, a string) throws. It does not silently fail open.
     const { allowHosts, denyHosts } = options;
     this.#allow = allowHosts !== undefined ? toHostList(allowHosts, 'allowHosts') : null;
     this.#deny = denyHosts !== undefined ? toHostList(denyHosts, 'denyHosts') : null;
@@ -154,12 +158,13 @@ export class FetchCapability implements SandboxCapability {
   }
 
   /**
-   * Throws unless the host policy (if any) admits `url`, and returns the
-   * URL to request. Under a policy that is the parsed absolute URL, so the
-   * request goes exactly where the check looked (a `<base>` element or a
-   * proxy cannot resolve it differently); without one, `url` unchanged.
-   * The message names only the guest-supplied hostname or scheme, never
-   * anything the host holds (the proxy token is not read before this).
+   * Throws unless the host policy (if any) admits `url`. Returns the URL
+   * to request. With a policy, this is the parsed absolute URL. Thus the
+   * request goes to the same location that the check examined. A `<base>`
+   * element or a proxy cannot resolve it differently. Without a policy,
+   * it is `url`, unchanged. The error message names only the hostname or
+   * scheme that the guest supplied. It never names data that the host
+   * holds. The proxy token is not read before this check.
    */
   private checkHost(url: string): string {
     if (this.#allow === null && this.#deny === null) return url;
@@ -190,9 +195,9 @@ export class FetchCapability implements SandboxCapability {
       return globalThis.fetch(url, options);
     }
 
-    // Case 2: same-origin URL -> direct fetch regardless of base
-    // (the spec's Flow C correction: same-origin bypass runs even
-    // when proxyBase is set to an absolute cross-origin URL).
+    // Case 2: same-origin URL -> direct fetch regardless of base.
+    // This is the Flow C correction of the spec: the same-origin bypass
+    // also runs when proxyBase is an absolute cross-origin URL.
     let targetOrigin: string;
     try {
       targetOrigin = new URL(url, window.location.href).origin;
@@ -246,10 +251,10 @@ function matchesHost(list: HostList, host: string): boolean {
 
 /**
  * Copies and normalizes a host list. Each entry goes through the URL
- * parser so it is compared in the same form as `URL.hostname`
- * (lowercase, IDNA/punycode, canonical IPv4). A malformed entry throws
- * rather than being kept in a form that could never match (which, in
- * `denyHosts`, would deny nothing).
+ * parser, so the comparison uses the same form as `URL.hostname`:
+ * lowercase, IDNA/punycode, canonical IPv4. A malformed entry throws.
+ * Otherwise the list keeps it in a form that can never match. In
+ * `denyHosts`, such an entry denies nothing.
  */
 function toHostList(entries: readonly string[], option: string): HostList {
   if (!Array.isArray(entries)) {
@@ -295,8 +300,8 @@ function parseHostname(name: string): string | null {
   }
   const host = stripTrailingDot(url.hostname);
   // No empty labels: a leading dot (`.evil.net`), `a..b`, a second
-  // trailing dot, or dots only. Checked before and after the URL parser,
-  // which maps other dot characters to `.`.
+  // trailing dot, or dots only. The check runs before and after the URL
+  // parser, because the parser changes other dot characters to `.`.
   if (hasEmptyLabel(name) || hasEmptyLabel(host)) return null;
   return host;
 }

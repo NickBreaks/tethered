@@ -179,7 +179,7 @@ describe('RuntimeFacade', () => {
     jsRunner.execute.mockReturnValueOnce(firstPromise);
 
     const firstExecute = facade.run('slow');
-    // Kick off a second execute that completes before the first resolves.
+    // Start a second execute that completes before the first resolves.
     facade.setMode('text');
     await facade.run('fast');
 

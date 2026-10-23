@@ -4,8 +4,8 @@ import type { CapabilityStubInfo } from '../capabilities/capability.js';
 /**
  * Per-run snapshot of one registered capability, sent to the JS worker.
  * The worker installs RPC bridge functions for enabled host-backed
- * capabilities, provides `timer` natively in-worker, and installs
- * throwing stubs for everything disabled.
+ * capabilities. It supplies `timer` natively in the worker. It installs
+ * stubs that throw for all disabled capabilities.
  */
 export interface JsCapabilitySnapshot {
   name: string;
@@ -13,7 +13,7 @@ export interface JsCapabilitySnapshot {
   stub: CapabilityStubInfo;
   /** True when the main-thread capability implements invokeHost(). */
   hostBacked: boolean;
-  /** Guest JS evaluated after bridge injection (e.g. fetch's response wrapper). */
+  /** Guest JS evaluated after bridge injection (for example, fetch's response wrapper). */
   setupScript?: string;
 }
 

@@ -1,8 +1,8 @@
 /**
- * The README quick start, run as written (bar the worker URL import) on
+ * The README quick start, run as written (except the worker URL import) on
  * a real Chromium `Worker`, with the page's `fetch` stubbed.
  *
- * Run via: npm run test:integration.
+ * Run with: npm run test:integration.
  */
 import { createSandboxRuntime, FetchCapability } from '../index.js';
 import { defaultJsWorkerFactory } from './default-worker-factories.js';

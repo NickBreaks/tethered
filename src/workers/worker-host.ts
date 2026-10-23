@@ -20,16 +20,17 @@ import { GuestTimers } from './guest-timers.js';
 const TIMEOUT_MSG = 'Execution timed out: script exceeded the time limit.';
 
 /**
- * QuickJS execution engine hosted inside the web worker. Holds no DOM or
- * framework dependencies so it can also run in-process (InProcessJsWorker) where
- * `Worker` is unavailable, e.g. jsdom test environments.
+ * QuickJS execution engine hosted inside the web worker. It has no DOM or
+ * framework dependencies. Thus it can also run in-process
+ * (InProcessJsWorker) where `Worker` is not available, for example in
+ * jsdom test environments.
  *
- * Privileged capabilities (storage/disk/fetch) stay on the main thread;
- * the host injects one asyncified bridge function per stubInfo entry that
- * relays the call over the `cap-call`/`cap-result` message pair. The VM
- * suspends while the main thread services the request. The guest timers
- * are pure computation and run natively in-worker (GuestTimers), switched
- * on by the `timer` capability's snapshot.
+ * Privileged capabilities (storage/disk/fetch) stay on the main thread.
+ * The host injects one asyncified bridge function per stubInfo entry.
+ * That function relays the call over the `cap-call`/`cap-result` message
+ * pair. The VM suspends while the main thread services the request. The
+ * guest timers are pure computation and run natively in the worker
+ * (GuestTimers). The `timer` capability's snapshot enables them.
  */
 export class JsWorkerHost {
   #module: QuickJSAsyncWASMModule | null = null;
@@ -113,17 +114,17 @@ export class JsWorkerHost {
       const result = await vm.evalCodeAsync(code);
 
       if ('value' in result) {
-        // Dump and dispose the eval result up-front so its lifetime
-        // doesn't outlive any subsequent timer-driven microtask drain.
+        // Dump and dispose the eval result first, so that its lifetime does
+        // not continue past a later timer-driven microtask drain.
         // Note: vm.dump() on a fulfilled Promise consumes the handle
-        // internally, so we must check alive before disposing.
+        // internally. Thus we must check alive before we dispose it.
         const value = vm.dump(result.value);
         if (result.value.alive) {
           result.value.dispose();
         }
 
-        // Drain the timer event loop when the cap is enabled — pending
-        // microtasks queued by the eval may still register timers.
+        // Drain the timer event loop when the cap is enabled. Pending
+        // microtasks that the eval queued can still register timers.
         let hadTimerError = false;
         if (timers) {
           const drainResult = await timers.drainEventLoop(runtime, vm, emit, deadline);
@@ -153,18 +154,18 @@ export class JsWorkerHost {
       try {
         timers?.cleanup();
       } catch {
-        // Best effort — timer handles may already be gone.
+        // Best effort. Timer handles can already be gone.
       }
       try {
         vm?.dispose();
       } catch {
-        // Async variant may throw during context cleanup
+        // The async variant can throw during context cleanup
       }
       try {
         runtime?.removeInterruptHandler();
         runtime?.dispose();
       } catch {
-        // Async variant may throw during runtime cleanup
+        // The async variant can throw during runtime cleanup
       }
     }
   }

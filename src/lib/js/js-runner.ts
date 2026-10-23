@@ -19,10 +19,11 @@ const SUPERSEDED_MSG = 'Execution superseded by a newer run.';
 
 /**
  * Grace period added to timeoutMs for the main-thread backstop timer.
- * The worker normally ends timed-out runs itself via its interrupt
- * handler; the backstop only fires when the worker can't (e.g. it is
- * asyncify-suspended awaiting a capability RPC that never resolves),
- * and then the worker is terminated and respawned.
+ * Usually the worker ends timed-out runs itself, through its interrupt
+ * handler. The backstop acts only when the worker cannot end the run. For
+ * example, the worker is asyncify-suspended and waits for a capability
+ * RPC that never resolves. The runner then terminates and respawns the
+ * worker.
  */
 const BACKSTOP_GRACE_MS = 2000;
 
@@ -30,15 +31,16 @@ const DEFAULT_BOOT_TIMEOUT_MS = 30_000;
 
 /**
  * Errors that mean the worker's heap is spent, not that the code was
- * wrong: a spent heap poisons every later run (even capability setup
- * scripts fail), so the worker is replaced and the run retried once.
+ * wrong. A spent heap causes all later runs to fail, and even capability
+ * setup scripts fail. Thus the runner replaces the worker and retries the
+ * run once.
  */
 const EXHAUSTED = /out of memory|setup failed|InternalError/i;
 
 /**
- * The guest functions the worker installs for a capability (mirrors the
- * capability bridge): a function capability's globals, else its own
- * name; an object capability's methods.
+ * The guest functions that the worker installs for a capability. This
+ * mirrors the capability bridge. For a function capability: its globals,
+ * or else its name. For an object capability: its methods.
  */
 function declaredMethods(stub: CapabilityStubInfo): readonly unknown[] {
   const list = stub.type === 'function' ? (stub.globals ?? [stub.name]) : stub.methods;
@@ -52,28 +54,29 @@ function workerErrorMessage(e: ErrorEvent): string {
 
 export interface JsRunnerOptions {
   /**
-   * Spawns the JS worker (required). `defaultJsWorkerFactory` from
-   * `tethered/workers` spawns the bundled one (without a global
-   * `Worker` it needs `createJsWorkerFactory({ allowInProcess: true })`); Vite-style apps
-   * can build their own on the package's worker-script export (see the
-   * README).
+   * Starts the JS worker (required). `defaultJsWorkerFactory` from
+   * `tethered/workers` starts the bundled worker. Without a global
+   * `Worker`, use `createJsWorkerFactory({ allowInProcess: true })`.
+   * Vite-style apps can build their own factory on the package's
+   * worker-script export (see the README).
    */
   workerFactory: () => Worker;
   timeoutMs?: number;
   /**
    * What `execute()` does while a run is in flight. `'supersede'`
    * (default): the older run settles immediately as a failure
-   * ("superseded"), its worker is terminated, and the new run starts on a
-   * freshly spawned worker once that is ready. This also stops an older
-   * run stuck in a hot loop or suspended on a host call that never
-   * returns. A run superseded before it started settles the same way
-   * without being posted. `'queue'`: the new run starts after every
-   * earlier run has settled (finished, timed out or aborted).
+   * ("superseded"), and its worker is terminated. The new run starts on a
+   * new worker when that worker is ready. This also stops an older run
+   * that is stuck in a hot loop or suspended on a host call that never
+   * returns. A run superseded before it started settles the same way, and
+   * is not posted. `'queue'`: the new run starts after all earlier runs
+   * settle (finished, timed out or aborted).
    */
   concurrency?: 'supersede' | 'queue';
   /**
-   * Replace the worker between runs once it has served this many, as
-   * insurance against slow leaks in the WASM heap. Off by default.
+   * Replace the worker between runs after it completes this number of
+   * runs. This gives protection against slow leaks in the WASM heap. Off
+   * by default.
    */
   recycleAfterRuns?: number;
   /**
@@ -82,8 +85,8 @@ export interface JsRunnerOptions {
    */
   recoverExhaustion?: boolean;
   /**
-   * How long a freshly spawned worker may take to report ready (ms). Past
-   * it the worker is terminated and the boot fails like a load error:
+   * How long a new worker can take to report ready (ms). After this time,
+   * the worker is terminated and the boot fails as a load error does:
    * `initialize()` rejects and `initError` is set. Defaults to 30000.
    */
   bootTimeoutMs?: number;
@@ -107,13 +110,13 @@ interface ActiveJsRun {
 }
 
 /**
- * JS code runner backed by a sandboxed JS engine in a web worker. Because execution
- * is off the main thread, abort() and the timeout backstop can always
- * stop a run — including hot synchronous loops — by terminating the
- * worker and respawning it.
- * Superseding a run replaces the worker the same way. The worker is also
- * replaced between runs on heap exhaustion (with one retry) and, opt-in,
- * every `recycleAfterRuns` runs.
+ * JS code runner that uses a sandboxed JS engine in a web worker.
+ * Execution is off the main thread. Thus abort() and the timeout backstop
+ * can always stop a run, hot synchronous loops included. They terminate
+ * the worker and respawn it.
+ * A supersede replaces the worker the same way. The worker is also
+ * replaced between runs on heap exhaustion (with one retry). As an
+ * opt-in, it is also replaced every `recycleAfterRuns` runs.
  */
 export class JsRunner implements CodeRunner {
   readonly label = 'JavaScript';
@@ -124,8 +127,8 @@ export class JsRunner implements CodeRunner {
   /**
    * `true` from `execute()` until its run settles. In `'supersede'` mode it
    * stays `true` while the superseding run waits for the replacement
-   * worker to boot, even though `activeTag` is already `null` then: the
-   * tag is set only once the run is posted to the worker.
+   * worker to boot. At that time, `activeTag` is already `null`, because
+   * the tag is set only when the run is posted to the worker.
    */
   readonly isRunning = this.#isRunning.asReadonly();
   readonly initError = this.#initError.asReadonly();
@@ -133,8 +136,9 @@ export class JsRunner implements CodeRunner {
   readonly #activeTag = createValue<string | null>(null);
   readonly #queued = createValue(0);
   /**
-   * The tag of the run the worker is executing, else `null` (including
-   * while a superseding run waits for a respawned worker; see `isRunning`).
+   * The tag of the run that the worker executes, else `null`. It is also
+   * `null` while a superseding run waits for a respawned worker (see
+   * `isRunning`).
    */
   readonly activeTag = this.#activeTag.asReadonly();
   /** Runs waiting for the one in flight to end (`'queue'` mode only). */
@@ -160,11 +164,11 @@ export class JsRunner implements CodeRunner {
   #activeRun: ActiveJsRun | null = null;
   #spawnPromise: Promise<void> | null = null;
   #chain: Promise<unknown> = Promise.resolve();
-  /** Bumped by every `'supersede'`-mode execute(); a stale ticket never starts. */
+  /** Every `'supersede'`-mode execute() increments this. A stale ticket never starts. */
   #requestSeq = 0;
   /** Tickets up to this one were aborted before they started (abort()/dispose()). */
   #abortedSeq = 0;
-  /** Wakes the `'supersede'`-mode runs waiting on a respawn, so they settle without it. */
+  /** Wakes the `'supersede'`-mode runs that wait for a respawn, so they settle without it. */
   readonly #wakeWaiting = new Set<() => void>();
   /** Fails each boot in progress (used by `dispose()`). */
   readonly #cancelBoots = new Set<() => void>();
@@ -202,11 +206,12 @@ export class JsRunner implements CodeRunner {
   }
 
   /**
-   * Spawns the worker and waits for its engine to load. Rejects with the
-   * load error (the factory throwing, the worker's `error` event, its init
-   * error, or no `ready` within `bootTimeoutMs`), which is also left in
-   * `initError`; calling again retries. Resolves without booting once the
-   * runner is disposed, including when `dispose()` cuts a boot short.
+   * Starts the worker and waits for its engine to load. Rejects with the
+   * load error, which also stays in `initError`. The load error is one of
+   * these: the factory throws, the worker's `error` event, its init error,
+   * or no `ready` within `bootTimeoutMs`. Call again to retry. After the
+   * runner is disposed, it resolves and does not boot. This also applies
+   * when `dispose()` stops a boot before it completes.
    */
   async initialize(): Promise<void> {
     if (this.#disposed) return;
@@ -224,7 +229,7 @@ export class JsRunner implements CodeRunner {
       this.#ready.set(false);
       throw e;
     } finally {
-      // A supersede may have started a newer spawn meanwhile; keep that one.
+      // A supersede can start a newer worker in this time. Keep that one.
       if (this.#spawnPromise === spawn) this.#spawnPromise = null;
     }
   }
@@ -234,10 +239,10 @@ export class JsRunner implements CodeRunner {
     const tag = options.tag ?? '';
     if (this.#concurrency === 'supersede') {
       const ticket = ++this.#requestSeq;
-      // Settle the run this one takes over now, so its promise can't hang
-      // behind the respawn: the one in flight, or ones still waiting for a
-      // worker (they wake, see a stale ticket and never start). A queued
-      // run never overlaps.
+      // Settle the runs that this one takes over now, so that their promises
+      // cannot hang behind the respawn. These are the run in flight and the
+      // runs that still wait for a worker. Those runs wake, see a stale
+      // ticket and never start. A queued run never overlaps.
       if (this.#activeRun) this.#supersede();
       for (const wake of [...this.#wakeWaiting]) wake();
       return this.#executeNow(code, timeoutMs, tag, ticket);
@@ -269,8 +274,9 @@ export class JsRunner implements CodeRunner {
     ) {
       this.#replaceWorker('periodic');
     }
-    // A respawn after abort/timeout/supersede may still be in flight — wait for it
-    // so back-to-back execute() calls don't race the new worker's boot.
+    // A respawn after abort/timeout/supersede can still be in flight. Wait
+    // for it, so that back-to-back execute() calls do not race the boot of
+    // the new worker.
     // A supersede-mode run also wakes early when abort() cancels it.
     if (this.#spawnPromise) {
       let wake = () => {};
@@ -279,13 +285,13 @@ export class JsRunner implements CodeRunner {
       try {
         await Promise.race([this.#spawnPromise, woken]);
       } catch {
-        // Failure surfaces via the not-initialized result below.
+        // The not-initialized result below shows the failure.
       } finally {
         this.#wakeWaiting.delete(wake);
       }
     }
-    // Stop was pressed (or the runner disposed) before this run started:
-    // it settles as aborted and is never posted.
+    // Stop was pressed or the runner was disposed before this run started.
+    // The run settles as aborted and is never posted.
     if (this.#disposed || (ticket !== null && ticket <= this.#abortedSeq)) {
       if (!this.#activeRun) this.#isRunning.set(false);
       return {
@@ -308,7 +314,7 @@ export class JsRunner implements CodeRunner {
       };
     }
     if (!this.#worker || !this.#ready.get()) {
-      // A superseded run left isRunning set for this one; nothing starts now.
+      // A superseded run left isRunning set for this one. Nothing starts now.
       if (!this.#activeRun) this.#isRunning.set(false);
       return {
         success: false,
@@ -367,8 +373,9 @@ export class JsRunner implements CodeRunner {
       this.#output.emit(sysEntry);
     });
 
-    // Only when this run's own worker reported the error: a kill already
-    // replaced the worker and reported its own failure.
+    // Recover only when the worker of this run reported the error.
+    // Otherwise, a kill already replaced the worker and reported its own
+    // failure.
     if (
       this.#recoverExhaustion &&
       !result.success &&
@@ -384,11 +391,11 @@ export class JsRunner implements CodeRunner {
   }
 
   /**
-   * Aborting terminates the worker outright and respawns it, so it
-   * stops any run — hot synchronous loops, runaway timer drains, and
-   * runs suspended on a pending fetch included. A run still waiting for
-   * the worker that replaces a superseded one is cancelled before it is
-   * posted. No-op when idle.
+   * Terminates the worker immediately and respawns it. Thus abort can
+   * stop all runs, including hot synchronous loops, runaway timer drains
+   * and runs suspended on a pending fetch. A run can still wait for the
+   * worker that replaces a superseded run. That run is cancelled before
+   * it is posted. No-op when idle.
    */
   async abort(): Promise<void> {
     this.#cancelWaiting();
@@ -397,14 +404,14 @@ export class JsRunner implements CodeRunner {
 
   /**
    * Terminates the worker and settles any in-flight run as aborted. The
-   * runner is unusable afterwards; subscribers are dropped.
+   * runner is unusable after this. Its subscribers are dropped.
    */
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#cancelWaiting();
     if (this.#activeRun) this.#kill(this.#activeRun.runId, 'abort');
-    // Fail every pending boot now rather than leave its timer armed.
+    // Fail every pending boot now. Do not leave its timer armed.
     for (const cancel of [...this.#cancelBoots]) cancel();
     this.#worker?.terminate();
     this.#worker = null;
@@ -422,12 +429,13 @@ export class JsRunner implements CodeRunner {
 
   async #spawnAndLoad(): Promise<void> {
     this.#runsSinceSpawn = 0;
-    // A throwing factory rejects this (async) call like any load failure.
+    // If the factory throws, this (async) call rejects, as for all load
+    // failures.
     const worker = this.#workerFactory();
     this.#worker = worker;
-    // The worker is untrusted: every message is shape-checked first, and
-    // anything malformed or unknown is dropped. So is anything from a
-    // worker that has since been replaced.
+    // The worker is untrusted. Each message gets a shape check first, and
+    // all that is malformed or unknown is dropped. All messages from a
+    // worker that was replaced are also dropped.
     worker.addEventListener('message', (e: MessageEvent<unknown>) => {
       if (this.#worker === worker) this.#handleWorkerMessage(worker, e.data);
     });
@@ -437,7 +445,7 @@ export class JsRunner implements CodeRunner {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        // A worker that never answers would otherwise leave this pending.
+        // Without this, a worker that never answers leaves this pending.
         const bootTimer = setTimeout(
           () =>
             settle(new Error(`JS worker did not become ready within ${this.#bootTimeoutMs} ms.`)),
@@ -457,7 +465,7 @@ export class JsRunner implements CodeRunner {
           if (checked.msg.type === 'ready') settle(null);
           else if (checked.msg.type === 'init-error') settle(new Error(checked.msg.message));
         };
-        // A worker the browser refuses to load only ever fires `error`.
+        // A worker that the browser refuses to load fires only `error`.
         const onError = (e: ErrorEvent) => settle(new Error(workerErrorMessage(e)));
         const cancel = () => settle(new Error('JS runner disposed.'));
         this.#cancelBoots.add(cancel);
@@ -474,7 +482,7 @@ export class JsRunner implements CodeRunner {
   #handleWorkerMessage(worker: Worker, data: unknown): void {
     const checked = checkWorkerMessage(data);
     if (!checked.ok) {
-      // Answer a malformed call so the guest's await doesn't hang.
+      // Answer a malformed call so the guest's await does not hang.
       if (checked.capCall) this.#replyCapError(worker, checked.capCall, checked.reason);
       return;
     }
@@ -502,7 +510,7 @@ export class JsRunner implements CodeRunner {
     worker: Worker,
     msg: Extract<JsWorkerToMainMsg, { type: 'cap-call' }>,
   ): Promise<void> {
-    // Ignore calls from an ended run; a reply would be misrouted.
+    // Ignore calls from a run that ended. A reply goes to the wrong run.
     if (this.#activeRun?.runId !== msg.runId) return;
     // Only the host's own enabled set counts, never what the worker claims.
     const cap = this.#registry.isEnabled(msg.capability)
@@ -538,15 +546,15 @@ export class JsRunner implements CodeRunner {
         };
       }
     }
-    // The run may have been aborted or superseded while the host call was
-    // in flight. Call ids restart in every worker, so the reply goes only
-    // to the worker that asked, and only while it is still current.
+    // The run can be aborted or superseded while the host call is in
+    // flight. Call ids restart in every worker, so the reply goes only to
+    // the worker that asked, and only while it is still current.
     if (this.#activeRun?.runId === msg.runId && this.#worker === worker) {
       try {
         worker.postMessage(reply);
       } catch (e) {
         // An un-cloneable result (DataCloneError): answer with an error so
-        // the guest's await doesn't hang until the timeout.
+        // the guest's await does not hang until the timeout.
         this.#replyCapError(worker, msg, e instanceof Error ? e.message : String(e));
       }
     }
@@ -559,10 +567,10 @@ export class JsRunner implements CodeRunner {
     try {
       worker.postMessage(reply);
     } catch {
-      // A plain error reply can't fail to clone, but the post itself can
-      // still throw (e.g. a worker that is going away). Don't let that
-      // escape as an unhandled rejection: the run's timeout backstop
-      // still ends a guest left waiting for this reply.
+      // A plain error reply cannot fail to clone. But the post itself can
+      // still throw, for example for a worker that is closing. Do not let
+      // that error escape as an unhandled rejection. The timeout backstop
+      // of the run still ends a guest that waits for this reply.
     }
   }
 
@@ -618,10 +626,10 @@ export class JsRunner implements CodeRunner {
 
   /**
    * Settles the run in flight as superseded and replaces its worker. The
-   * old worker can't be reused: it may be stuck in a hot loop, or
-   * suspended on a host call — and the engine allows one suspension at a
-   * time, so every host call of the next run would fail. isRunning stays
-   * true because the superseding run starts once the new worker is ready.
+   * old worker cannot be used again. It can be stuck in a hot loop or
+   * suspended on a host call. The engine allows one suspension at a time,
+   * so all host calls of the next run fail. isRunning stays true, because
+   * the superseding run starts when the new worker is ready.
    */
   #supersede(): void {
     if (!this.#activeRun) return;
@@ -663,8 +671,8 @@ export class JsRunner implements CodeRunner {
   #respawn(): void {
     const spawn = this.#spawnAndLoad();
     this.#spawnPromise = spawn;
-    // A supersede during this boot starts a newer spawn: only the newest
-    // one may mark the runner ready, report its error or clear the slot.
+    // A supersede during this boot starts a newer worker. Only the newest
+    // worker can mark the runner ready, report its error or clear the slot.
     spawn
       .then(() => {
         if (this.#spawnPromise !== spawn) return;

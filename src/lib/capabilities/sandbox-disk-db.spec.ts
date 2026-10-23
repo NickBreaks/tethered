@@ -40,8 +40,8 @@ function countEntries(db: IDBDatabase, storeName: string): Promise<number> {
 }
 
 // IndexedDB is not available in the node/jsdom unit-test runner. These tests
-// require real IDB and run only when it is present: the browser integration
-// suite (vitest.integration.config.ts) runs them in Chromium.
+// must have a real IDB and run only when it is present. The browser
+// integration suite (vitest.integration.config.ts) runs them in Chromium.
 const hasIndexedDB = typeof indexedDB !== 'undefined';
 
 describe.skipIf(!hasIndexedDB)('openSandboxDisk', () => {
@@ -59,7 +59,7 @@ describe.skipIf(!hasIndexedDB)('openSandboxDisk', () => {
       expect(db.version).toBe(SANDBOX_DISK_DB_VERSION);
       expect(db.objectStoreNames.contains(FILES_STORE)).toBe(true);
       expect(db.objectStoreNames.contains(WRITE_JOURNAL_STORE)).toBe(true);
-      // Journal store should be empty (count() — the subset of IDB jsdom supports)
+      // The journal store must be empty (count() is in the subset of IDB that jsdom supports)
       expect(await countEntries(db, WRITE_JOURNAL_STORE)).toBe(0);
     } finally {
       db.close();
@@ -67,8 +67,8 @@ describe.skipIf(!hasIndexedDB)('openSandboxDisk', () => {
   });
 
   it('cold-open: write_journal has by_path and by_timestamp indexes', async () => {
-    // jsdom's IDB is partial — skip if the index assertion surface is unavailable.
-    // If this runs in jsdom and the schema API is incomplete, guard here; browser mode
+    // jsdom's IDB is partial. Skip if the index assertion surface is not available.
+    // If this runs in jsdom and the schema API is incomplete, guard here. Browser mode
     // runs it fully.
     const db = await openSandboxDisk();
     try {

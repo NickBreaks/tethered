@@ -13,7 +13,7 @@ permissions:
   pages: write
   id-token: write
 
-# One deployment at a time; let an in-progress deployment finish.
+# One deployment at a time. Let a deployment in progress finish.
 concurrency:
   group: pages
   cancel-in-progress: false

@@ -1,14 +1,15 @@
 // Import guard: the core entry (src/index.ts and everything under src/lib/)
 // must stay dependency-free and framework-free, so any app can consume it.
-// Mirrored by the ESLint `no-restricted-imports` rules for src/lib.
+// The ESLint `no-restricted-imports` rules for src/lib mirror this guard.
 //
 // The main entry must also never reach a worker module (directly, by
-// `new URL(…, import.meta.url)` or by dynamic import): those live in the
-// `tethered/workers` entry (src/workers/) and the worker script
-// (src/js-worker.ts). Mirrored after the build by scripts/verify-build.mjs.
+// `new URL(…, import.meta.url)` or by dynamic import). Those modules are in
+// the `tethered/workers` entry (src/workers/) and the worker script
+// (src/js-worker.ts). After the build, scripts/verify-build.mjs mirrors
+// this guard.
 //
-// Vitest runs specs in Node, but the package has no @types/node, so the
-// fs module is imported through an untyped specifier.
+// Vitest runs specs in Node, but the package has no @types/node. Thus this
+// spec imports the fs module through an untyped specifier.
 
 interface NodeFs {
   readdirSync(dir: string): string[];

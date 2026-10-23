@@ -2,10 +2,10 @@ import { JsWorkerHost } from './workers/worker-host.js';
 import type { JsMainToWorkerMsg, JsWorkerToMainMsg } from './index.js';
 
 /**
- * The dedicated-worker globals this module touches. Declared locally rather
- * than via `/// <reference lib="webworker" />`, which conflicts with the
- * DOM lib the rest of the package compiles against (and whose
- * `MessageEvent` type this reuses).
+ * The dedicated-worker globals that this module uses. They are declared
+ * locally, not through `/// <reference lib="webworker" />`. That reference
+ * conflicts with the DOM lib that the rest of the package compiles
+ * against. This module reuses the `MessageEvent` type of the DOM lib.
  */
 interface WorkerScope {
   postMessage(message: JsWorkerToMainMsg): void;

@@ -13,9 +13,9 @@ type RunMsg = Extract<JsMainToWorkerMsg, { type: 'run' }>;
 
 /**
  * Scripted stand-in for the QuickJS worker: reports ready, records posts.
- * Listeners are called directly (not through an EventTarget), so an
- * exception thrown by the runner's message handler fails the test instead
- * of being swallowed by the DOM's error reporting.
+ * Listeners are called directly, not through an EventTarget. Thus an
+ * exception from the runner's message handler fails the test. The DOM's
+ * error reporting does not swallow it.
  */
 class FakeJsWorker {
   readonly posts: JsMainToWorkerMsg[] = [];
@@ -42,7 +42,7 @@ class FakeJsWorker {
     this.simulateRaw(msg);
   }
 
-  /** Posts anything at all, as an untrusted worker could. Listener throws propagate. */
+  /** Posts any value, as an untrusted worker can. Exceptions from listeners propagate. */
   simulateRaw(data: unknown): void {
     const event = new MessageEvent('message', { data });
     for (const fn of [...(this.#listeners.get('message') ?? [])]) fn(event);
@@ -285,8 +285,8 @@ describe('JsRunner run lifecycle', () => {
         runner.onOutput((e) => streamed.push(e));
         runner.onRun((r) => runs.push(r));
 
-        // The old worker keeps talking, as a stale worker could: with its
-        // own runId, and with the new run's id.
+        // The old worker continues to send messages, as a stale worker can:
+        // with its own runId, and with the new run's id.
         for (const runId of [runA.runId, runB.runId]) {
           workers[0].simulate({
             type: 'output',
@@ -479,8 +479,8 @@ describe('JsRunner run lifecycle', () => {
         await buildManual();
         const pA = runner.execute('a()');
         await settle();
-        // B is posted the moment the respawned worker is ready; C supersedes
-        // it right there, before the first respawn's bookkeeping has run.
+        // B is posted when the respawned worker is ready. C supersedes it
+        // immediately, before the bookkeeping of the first respawn runs.
         let pC: Promise<ExecutionResult> | undefined;
         runner.onRun((info) => {
           if (info?.tag === 'B' && !pC) {
@@ -495,8 +495,8 @@ describe('JsRunner run lifecycle', () => {
         expect(workers).toHaveLength(3);
         expect(runner.isRunning.get()).toBe(true);
 
-        // The third worker is still booting: neither initialize() nor a new
-        // run may start another spawn or fail as not initialized.
+        // The third worker still boots. Neither initialize() nor a new run
+        // can start another worker or fail as not initialized.
         const init = runner.initialize();
         const pD = runner.execute('d()', { tag: 'D' });
         await settle();
@@ -907,9 +907,9 @@ describe('JsRunner run lifecycle', () => {
 });
 
 // The worker is untrusted: every worker→host message is shape-checked on
-// the host, during boot and during runs. FakeJsWorker rethrows
-// listener exceptions, so "ignored without throwing" is checked by every
-// simulateRaw() call returning normally.
+// the host, during boot and during runs. FakeJsWorker throws listener
+// exceptions again. Thus each simulateRaw() call that returns normally
+// checks "ignored without throwing".
 describe('JsRunner worker message validation', () => {
   let registry: CapabilityStore;
   let workers: FakeJsWorker[];

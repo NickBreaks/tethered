@@ -2,15 +2,16 @@
  * Post-build gate.
  *
  * 1. The main entry (`dist/index.js` and every module it imports) must not
- *    reference the worker modules: no `js-worker`, no `worker-host`, no
- *    `workers/` import and no `new Worker(`. Those live in the `./workers`
- *    entry, so a consumer that passes its own worker factory bundles none
- *    of them. Mirrors src/lib/core-import-guard.spec.ts.
- * 2. No emitted `.d.ts` mentions the JS engine: it is an implementation
- *    detail of the worker, so it can be swapped without breaking the
- *    public types.
- * 3. The worker bundle exists and imports nothing (it must be
- *    self-contained, WASM included).
+ *    refer to the worker modules: no `js-worker`, no `worker-host`, no
+ *    `workers/` import and no `new Worker(`. Those modules are in the
+ *    `./workers` entry. Thus a consumer that gives its own worker factory
+ *    bundles none of them. This check mirrors
+ *    src/lib/core-import-guard.spec.ts.
+ * 2. No emitted `.d.ts` mentions the JS engine. The engine is an
+ *    implementation detail of the worker, so you can replace it and not
+ *    break the public types.
+ * 3. The worker bundle exists and imports nothing. It must be
+ *    self-contained, with the WASM included.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

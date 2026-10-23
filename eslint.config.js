@@ -1,8 +1,8 @@
 import tseslint from 'typescript-eslint';
 
 // The core (src/index.ts, src/lib/) is dependency-free and must not reach
-// the workers. Mirrored by src/lib/core-import-guard.spec.ts and, after the
-// build, by scripts/verify-build.mjs.
+// the workers. src/lib/core-import-guard.spec.ts mirrors these rules.
+// After the build, scripts/verify-build.mjs also mirrors them.
 const NO_WORKERS_IN_CORE = {
   group: ['**/workers', '**/workers/**', '**/js-worker', '**/js-worker.js'],
   message: 'The core entry must not reference the worker modules; they live in src/workers/.',

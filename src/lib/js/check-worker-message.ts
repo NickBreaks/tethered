@@ -3,14 +3,15 @@ import type { JsWorkerToMainMsg } from './worker-protocol.js';
 
 /**
  * Host-side shape check for worker→host messages. The worker runs guest
- * code, so everything it posts is untrusted: a message is accepted only
- * when its `type` is known and every required field has the right type.
+ * code, so all that it posts is untrusted. The check accepts a message
+ * only when its `type` is known and each required field has the correct
+ * type.
  *
- * Accepted messages are rebuilt from their known fields, so extra
+ * Accepted messages are rebuilt from their known fields. Thus extra
  * properties never reach the runner or its listeners. Never throws.
  *
- * Capability checks that need the host's state (is it registered, is it
- * enabled) are the caller's job; this only checks the shape.
+ * The caller does the capability checks that need the state of the host
+ * (is it registered, is it enabled). This function checks only the shape.
  */
 export type CheckedWorkerMsg =
   | { ok: true; msg: JsWorkerToMainMsg }
@@ -18,9 +19,9 @@ export type CheckedWorkerMsg =
       ok: false;
       reason: string;
       /**
-       * Set for a malformed `cap-call` whose `callId` and `runId` are
-       * usable, so the host can answer with an error `cap-result` instead
-       * of leaving the guest's call hanging.
+       * Set for a malformed `cap-call` that has a usable `callId` and
+       * `runId`. The host can then answer with an error `cap-result`, so
+       * the call of the guest does not hang.
        */
       capCall?: { callId: number; runId: number };
     };

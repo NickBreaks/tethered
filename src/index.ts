@@ -1,9 +1,8 @@
-// Framework-free, dependency-free core. Nothing reachable from this entry
-// may import a package, nor reference the worker modules: the default
-// worker factories and the in-process engine fallback live in
-// `tethered/workers`, so apps that bring their own factories don't bundle
-// them. Framework bindings belong in separate packages built on
-// `ReadableValue`.
+// Framework-free, dependency-free core. Code that this entry reaches must
+// not import a package or refer to the worker modules. The default worker
+// factories and the in-process engine fallback are in `tethered/workers`.
+// Thus apps that bring their own factories do not bundle them. Framework
+// bindings go in separate packages built on `ReadableValue`.
 
 export { createSandboxRuntime } from './lib/create-sandbox-runtime.js';
 export type { SandboxRuntime, SandboxRuntimeOptions } from './lib/create-sandbox-runtime.js';

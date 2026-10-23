@@ -1,7 +1,7 @@
 // Type- and value-level guards for the public surface of both entries.
-// Each `@ts-expect-error` fails the typecheck if the line it marks ever
-// compiles again; the export lists fail when an export is added or
-// removed without updating them (and the CHANGELOG).
+// Each `@ts-expect-error` fails the typecheck if the line it marks
+// compiles again. The export lists fail when an export is added or
+// removed and the lists (and the CHANGELOG) are not updated.
 
 // @ts-expect-error A4: TracebackFrame is not exported
 import type { TracebackFrame } from '../../index.js';
@@ -74,7 +74,7 @@ describe('public surface', () => {
     const factory = () => ({}) as Worker;
     // @ts-expect-error the only worker factory option is jsWorkerFactory
     const rt = createSandboxRuntime({ jsWorkerFactory: factory, wasmWorkerFactory: factory });
-    // @ts-expect-error A16: extra runners are registered via `runners`, not as runtime fields
+    // @ts-expect-error A16: extra runners are registered through `runners`, not as runtime fields
     expect(rt.wasm).toBeUndefined();
     rt.dispose();
   });
