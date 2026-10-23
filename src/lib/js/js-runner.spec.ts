@@ -720,6 +720,109 @@ describe('JsRunner', () => {
         ])
       );
     });
+
+    const logsOf = (output: OutputEntry[]) =>
+      output.filter((e) => e.type === 'log').map((e) => e.content);
+
+    it('fires top-level timers in due-time order on one virtual clock', async () => {
+      registry.setEnabled('timer', true);
+      const result = await service.execute(`
+        setTimeout(() => console.log('A'), 5000);
+        setTimeout(() => {
+          console.log('B');
+          setTimeout(() => console.log('C'), 10);
+        }, 0);
+      `);
+      expect(result.success).toBe(true);
+      expect(logsOf(result.output)).toEqual(['B', 'C', 'A']);
+    }, 10_000);
+
+    it('counts setInterval ticks against a top-level setTimeout on the same clock', async () => {
+      registry.setEnabled('timer', true);
+      const result = await service.execute(`
+        let n = 0;
+        const id = setInterval(() => n++, 1000);
+        setTimeout(() => { clearInterval(id); console.log(n); }, 5500);
+      `);
+      expect(result.success).toBe(true);
+      expect(logsOf(result.output)).toEqual(['5']);
+    }, 10_000);
+
+    it('reports the settled value of an async top-level promise that waits on a timer', async () => {
+      registry.setEnabled('timer', true);
+      const result = await service.execute(`
+        (async () => {
+          await new Promise((r) => setTimeout(r, 1000));
+          return 'late';
+        })()
+      `);
+      expect(result.success).toBe(true);
+      expect(result.output).toContainEqual(
+        expect.objectContaining({ type: 'result', content: 'late' }),
+      );
+    }, 10_000);
+  });
+
+  describe('Promise jobs without the timer capability', () => {
+    afterEach(() => {
+      service.timeoutMs = 5000;
+    });
+
+    const results = (output: OutputEntry[]) =>
+      output.filter((e) => e.type === 'result').map((e) => e.content);
+
+    it('runs promise jobs after the top-level eval', async () => {
+      const result = await service.execute(`
+        Promise.resolve().then(() => console.log('x'));
+        console.log('first');
+      `);
+      expect(result.success).toBe(true);
+      expect(result.output.filter((e) => e.type === 'log').map((e) => e.content)).toEqual([
+        'first',
+        'x',
+      ]);
+    }, 10_000);
+
+    it('reports the settled value of an async top-level IIFE, not a pending promise', async () => {
+      const result = await service.execute(`
+        (async () => {
+          await null;
+          await Promise.resolve();
+          return { answer: 42 };
+        })()
+      `);
+      expect(result.success).toBe(true);
+      expect(results(result.output)).toEqual([JSON.stringify({ answer: 42 }, null, 2)]);
+    }, 10_000);
+
+    it('reports the value of a top-level promise that is already fulfilled', async () => {
+      const result = await service.execute('Promise.resolve(5)');
+      expect(result.success).toBe(true);
+      expect(results(result.output)).toEqual(['5']);
+    }, 10_000);
+
+    it('fails the run when the top-level promise rejects', async () => {
+      const result = await service.execute(`(async () => { throw new Error('boom'); })()`);
+      expect(result.success).toBe(false);
+      expect(result.timedOut).toBe(false);
+      expect(result.error).toMatch(/^Error: boom/);
+      expect(result.output).toContainEqual(
+        expect.objectContaining({ type: 'error', content: expect.stringMatching(/^Error: boom/) }),
+      );
+    }, 10_000);
+
+    it('gives no result for a top-level promise that can never settle', async () => {
+      const result = await service.execute('new Promise(() => {})');
+      expect(result.success).toBe(true);
+      expect(results(result.output)).toEqual([]);
+    }, 10_000);
+
+    it('times out a promise chain that never ends', async () => {
+      service.timeoutMs = 200;
+      const result = await service.execute('function f() { Promise.resolve().then(f) } f()');
+      expect(result.success).toBe(false);
+      expect(result.timedOut).toBe(true);
+    }, 10_000);
   });
 
   // CodeRunner conformance

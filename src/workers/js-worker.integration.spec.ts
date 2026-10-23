@@ -8,7 +8,15 @@
  * Run with: npm run test:integration. Under the jsdom unit suite (no `Worker`)
  * the suite is skipped.
  */
-import { CapabilityStore, JsRunner, type SandboxCapability } from '../index.js';
+import { vi } from 'vitest';
+import {
+  CapabilityStore,
+  FetchCapability,
+  JsRunner,
+  TimerCapability,
+  type ProxyAuth,
+  type SandboxCapability,
+} from '../index.js';
 import { defaultJsWorkerFactory } from './default-worker-factories.js';
 
 const SUPERSEDED = 'Execution superseded by a newer run.';
@@ -95,5 +103,101 @@ describe.skipIf(typeof Worker === 'undefined')('JsRunner on a real Worker', () =
     const next = await runner.execute('40 + 2');
     expect(next.success).toBe(true);
     expect(next.output.at(-1)).toEqual(expect.objectContaining({ type: 'result', content: '42' }));
+  }, 20_000);
+
+  it.each([
+    ["throw new Error('out of memory')"],
+    ["throw { name: 'InternalError', message: 'out of memory' }"],
+    ['function f() { f() } f()'],
+  ])('%s fails once, with no retry and no worker replacement', async (code) => {
+    const starts: string[] = [];
+    const recycles: string[] = [];
+    runner.onRun((info) => {
+      if (info) starts.push(info.tag);
+    });
+    runner.onRecycle((reason) => recycles.push(reason));
+    const result = await runner.execute(code, { tag: 'g' });
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(starts).toEqual(['g']);
+    expect(recycles).toEqual([]);
+  }, 20_000);
+
+  it('a thrown fake interrupt is an ordinary error, not a timeout', async () => {
+    const result = await runner.execute("throw { name: 'InternalError', message: 'interrupted' }");
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.error).toMatch(/^InternalError: interrupted/);
+  }, 20_000);
+
+  it('runs promise jobs and reports an async result without the timer capability', async () => {
+    const result = await runner.execute(
+      "Promise.resolve().then(() => console.log('x')); (async () => { await null; return 7 })()",
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.map((e) => e.content)).toEqual(['[hang, echo enabled]', 'x', '7']);
+  }, 20_000);
+});
+
+describe.skipIf(typeof Worker === 'undefined')('host calls in promise jobs and timers on a real Worker', () => {
+  let runner: JsRunner;
+  const originalFetch = globalThis.fetch;
+  const stubProxyAuth = {
+    proxyBase: () => null,
+    authHeader: () => null,
+    setToken: vi.fn(),
+    clearToken: vi.fn(),
+    invalidate: vi.fn(),
+    tokenInvalid: () => false,
+  } as unknown as ProxyAuth;
+  const echoCap: SandboxCapability = {
+    name: 'echo',
+    description: 'host call that answers at once',
+    stubInfo: { name: 'echo', type: 'function' },
+    invokeHost: async (_method, args) => args[0],
+  };
+
+  beforeEach(async () => {
+    const registry = new CapabilityStore();
+    registry.register(new FetchCapability(stubProxyAuth));
+    registry.register(new TimerCapability());
+    registry.register(echoCap);
+    for (const name of ['fetch', 'timer', 'echo']) registry.setEnabled(name, true);
+    runner = new JsRunner(registry, { workerFactory: defaultJsWorkerFactory, timeoutMs: 10_000 });
+    await runner.initialize();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    runner.dispose();
+  });
+
+  it('two sequential await fetch() calls in one async function give the result', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async () => new Response('ok', { status: 200 }));
+    const result = await runner.execute(`(async () => {
+      const a = await fetch('https://example.com/a');
+      const b = await fetch('https://example.com/b');
+      return a.status + b.status;
+    })()`);
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(result.output.filter((e) => e.type === 'result').map((e) => e.content)).toEqual(['400']);
+  }, 20_000);
+
+  it('a host call in a setTimeout callback gives its value', async () => {
+    const result = await runner.execute(
+      'new Promise((resolve) => setTimeout(() => resolve(echo(41) + 1), 10))',
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.filter((e) => e.type === 'result').map((e) => e.content)).toEqual(['42']);
+  }, 20_000);
+
+  it('an endless async loop that awaits a host call times out', async () => {
+    const result = await runner.execute(
+      '(async () => { let n = 0; while (true) { n = await echo(n + 1) } })()',
+      { timeoutMs: 300 },
+    );
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(true);
   }, 20_000);
 });

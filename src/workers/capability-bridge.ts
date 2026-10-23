@@ -1,5 +1,10 @@
-import type { QuickJSAsyncContext, QuickJSHandle } from 'quickjs-emscripten-core';
-import type { CapabilityStubInfo } from '../index.js';
+import type {
+  AsyncFunctionImplementation,
+  QuickJSAsyncContext,
+  QuickJSHandle,
+} from 'quickjs-emscripten-core';
+import type { CapabilityStubInfo } from '../lib/capabilities/capability.js';
+import type { SuspendGate } from './engine-async.js';
 
 export interface CapabilityBridgeSpec {
   name: string;
@@ -15,24 +20,51 @@ export interface CapabilityBridgeSpec {
  * result back into VM handles. The worker uses this function and relays
  * over postMessage to the main thread. Capability specs also use it and
  * call invokeHost directly.
+ *
+ * With a `gate`, a call fails with a guest error when the engine cannot
+ * suspend. Without a gate, the caller must make sure that the engine can
+ * always suspend (for example, it uses only `evalCodeAsync`).
  */
 export function injectCapabilityBridge(
   vm: QuickJSAsyncContext,
   spec: CapabilityBridgeSpec,
   invoke: (method: string, args: unknown[]) => Promise<unknown>,
+  gate?: SuspendGate,
 ): void {
   const makeBridgeFn = (fnName: string): QuickJSHandle =>
-    vm.newAsyncifiedFunction(fnName, async (...handles: QuickJSHandle[]) => {
-      // The VM is suspended during the async relay (Asyncify), so only
-      // handle creation is allowed here. Do not use vm.evalCode.
-      const args = handles.map((h) => vm.dump(h));
-      try {
-        const value = await invoke(fnName, args);
-        return { value: marshal(vm, value) };
-      } catch (e) {
-        return { error: vm.newError(e instanceof Error ? e.message : String(e)) };
+    // The engine also accepts a result that is not a promise. Then the
+    // engine does not suspend. The type of newAsyncifiedFunction does not
+    // show this, thus the cast.
+    vm.newAsyncifiedFunction(fnName, ((...handles: QuickJSHandle[]) => {
+      // When the engine cannot suspend here, fail at once. Do not return
+      // a promise: the engine cannot wait for it.
+      if (gate && !gate.open) {
+        return {
+          error: vm.newError(
+            `${fnName}() cannot run here: a host call cannot suspend the engine in this place.`,
+          ),
+        };
       }
-    });
+      // Dumping an argument can call guest code (toJSON). A host call
+      // from that code cannot suspend, thus the gate is closed for it.
+      const dumpArgs = (): unknown[] => handles.map((h) => vm.dump(h));
+      const args = gate ? gate.hostOnly(dumpArgs) : dumpArgs();
+      return relay(fnName, args);
+    }) as AsyncFunctionImplementation);
+
+  // The VM is suspended during the async relay (Asyncify), so only
+  // handle creation is allowed here. Do not use vm.evalCode.
+  const relay = async (
+    fnName: string,
+    args: unknown[],
+  ): Promise<{ value: QuickJSHandle } | { error: QuickJSHandle }> => {
+    try {
+      const value = await invoke(fnName, args);
+      return { value: marshal(vm, value) };
+    } catch (e) {
+      return { error: vm.newError(e instanceof Error ? e.message : String(e)) };
+    }
+  };
 
   if (spec.stub.type === 'function') {
     for (const fnName of spec.stub.globals ?? [spec.stub.name]) {

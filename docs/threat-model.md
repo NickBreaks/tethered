@@ -57,9 +57,15 @@ never copies them into the worker or into an error message.
 - Time: the interrupt handler of the engine stops guest code after
   `timeoutMs` (default 5000 ms for each run). If the engine cannot stop
   itself, a backstop on the main thread terminates the worker 2 s later.
-  This is also true while the guest waits for a host call.
+  This is also true while the guest waits for a host call. The limit
+  also applies to promise jobs and timers after the script. Only the
+  interrupt handler or the deadline can mark a run as timed out. A
+  thrown value cannot. The runner refuses a time limit that is not
+  finite and greater than 0.
 - Memory: each run gets a fresh engine runtime with a 256 MiB memory
-  limit.
+  limit. The runner retries a run only when the worker reports a spent
+  heap from signals that the guest cannot forge. Refer to
+  [run lifecycle](run-lifecycle.md).
 - Boot: if a worker is not ready within `bootTimeoutMs` (default 30 s),
   the host terminates it.
 
@@ -107,7 +113,17 @@ convert the arguments with `String()`.
 
 The guest gets a `fetch(url, { method, headers, body })` that returns a
 response with `status`, `ok`, `statusText`, `text()` and `json()`. The
-host reads all of the response body and copies it to the guest.
+host reads the response body on the main thread and copies it to the
+guest. The host stops the read when the body becomes larger than
+`maxResponseBytes` (default 10 MiB). This limit is outside the memory
+limit of the worker. When a run ends, the host aborts all requests of
+the run that are in flight. This includes a run that is aborted, times
+out or is superseded.
+
+The capability resolves the guest URL one time, against
+`document.baseURI` (else `location.href`). The page `fetch` uses the same
+base. The host policy, the same-origin check and the request all use
+this absolute URL.
 
 The capability selects the route in this sequence:
 
@@ -131,13 +147,14 @@ The capability selects the route in this sequence:
    The capability does not find public-suffix wildcards with more than
    one label (for example, `*.co.uk`). A refused URL fails before a
    network call occurs. There is no proxy call and the host does not read
-   the token. The capability sends the admitted URL in its parsed absolute
-   form. Thus, the request goes to the URL that the check examined.
+   the token. The request goes to the URL that the check examined.
 2. **Proxy disabled** (no proxy URL): the `fetch` of the page, directly.
 3. **Same-origin URL**: the `fetch` of the page, directly, also when a
-   proxy is configured.
+   proxy is configured. The origin of the page is `location.origin`.
 4. **All other URLs**: a `POST` to the proxy, with the token in a header
-   (refer to [proxy protocol](proxy-protocol.md)).
+   (refer to [proxy protocol](proxy-protocol.md)). The capability removes
+   trailing slashes from the proxy base before it adds `/proxy/fetch`.
+   Thus the token goes only to the host of the proxy base.
 
 What the guest can do with this capability:
 
@@ -213,6 +230,9 @@ are records in the `__sandbox_disk__` IndexedDB database.
 - Paths are normalized strings that the store uses as record keys. There
   is no real file system behind them. Thus, `..` and similar paths cannot
   go out of the store.
+- `normalizePath` resolves `.` and `..` segments as POSIX does. A `..` at
+  the root stays at the root (`/../x` is `/x`). Thus, `/a/../b` and `/b`
+  are the same file.
 - The guest can read, overwrite and list all files in the store. This
   includes files from earlier runs and other guests. Data stays from one
   run to the next, and from one session to the next.

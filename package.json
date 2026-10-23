@@ -1,6 +1,6 @@
 {
   "name": "tethered",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Run untrusted JavaScript in a browser Web Worker sandbox. Guest code reaches the host only through capabilities you register.",
   "license": "MIT",
   "type": "module",
@@ -54,8 +54,8 @@
     "preview:demo": "vite preview --config demo/vite.config.ts"
   },
   "dependencies": {
-    "@jitl/quickjs-singlefile-browser-release-asyncify": "^0.32.0",
-    "quickjs-emscripten-core": "^0.32.0"
+    "@jitl/quickjs-singlefile-browser-release-asyncify": "0.32.0",
+    "quickjs-emscripten-core": "0.32.0"
   },
   "devDependencies": {
     "@vitest/browser": "4.1.12",
@@ -69,5 +69,17 @@
     "vite": "^8.3.5",
     "vitest": "4.1.12",
     "yaml": "^2.9.1"
-  }
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NickBreaks/tethered.git"
+  },
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/NickBreaks/tethered/issues"
+  },
+  "homepage": "https://github.com/NickBreaks/tethered#readme"
 }

@@ -28,9 +28,16 @@ export interface SandboxRuntimeOptions {
   jsRecycleAfterRuns?: number;
   /** Respawn the JS worker and retry once on heap exhaustion. Defaults to `true`. */
   jsRecoverExhaustion?: boolean;
-  /** How long the JS worker may take to report ready (ms). Defaults to 30000. */
+  /**
+   * How long the JS worker may take to report ready (ms). Defaults to
+   * 30000. It must be a finite number greater than 0 and at most
+   * 2147483647.
+   */
   jsBootTimeoutMs?: number;
-  /** Per-run time limit for the JS runner (ms). Defaults to 5000. */
+  /**
+   * Per-run time limit for the JS runner (ms). Defaults to 5000. It must be
+   * a finite number greater than 0 and at most 2147481647.
+   */
   timeoutMs?: number;
   /**
    * Extra runners for the facade, keyed by mode. `js` is built in and
@@ -58,6 +65,8 @@ export interface SandboxRuntime {
  * `js.initialize()` when you want the worker to boot. That call rejects
  * if the worker fails to load.
  * Throws if `options.runners` has a `js` key or `initialMode` is unknown.
+ * Throws a `RangeError` if `timeoutMs` or `jsBootTimeoutMs` is not a
+ * usable time limit.
  */
 export function createSandboxRuntime(options: SandboxRuntimeOptions): SandboxRuntime {
   const extra = options.runners ?? {};

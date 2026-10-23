@@ -17,6 +17,13 @@ The proxy base comes from `corsProxyUrl` (`createSandboxRuntime`).
 | `''` | Same-origin proxy at `/proxy/fetch` (for example, a dev-server rewrite). |
 | absolute URL | The proxy base, for example `https://proxy.example.com`. |
 
+The client removes trailing slashes from the base, then adds
+`/proxy/fetch`. Thus `'/'` is the same as `''`, and
+`https://proxy.example.com/` gives `https://proxy.example.com/proxy/fetch`.
+A relative base resolves against `location.href` of the page, not
+against a `<base>` element. Thus the token stays on the origin of the
+page.
+
 The token is in `sessionStorage` on the host page (`ProxyAuth.setToken`).
 The host reads it again for each request through the proxy. The token
 never goes into the worker.
@@ -35,7 +42,7 @@ X-Proxy-Authorization: Bearer <token>
 
 | Body field | Type | Value |
 | --- | --- | --- |
-| `url` | string | The destination. Without a host policy, it is the string from the guest, without changes. With `allowHosts`/`denyHosts`, it is the parsed absolute URL (`new URL(url, location.href).href`) that passed the policy. |
+| `url` | string | The destination, as a parsed absolute URL. The client resolves the URL of the guest against `document.baseURI` (else `location.href`), the same as the `fetch` of the page. With `allowHosts`/`denyHosts`, this is the URL that passed the policy. |
 | `method` | string | The `options.method` of the guest. The default is `"GET"`. |
 | `headers` | object | The `options.headers` of the guest, as a `{ name: value }` object of strings. The default is `{}`. |
 | `body` | string or `null` | The `options.body` of the guest. The default is `null`. |
@@ -59,6 +66,11 @@ the `Content-Type` and `X-Proxy-Authorization` request headers.
 
 The guest gets the response of the proxy as the fetch result: its
 `status`, `ok` and `statusText`, and its body as text.
+
+The client reads the body as a stream and counts the bytes. If the body
+is larger than `maxResponseBytes` (default 10 MiB), the client cancels
+the stream and the `fetch` of the guest fails. When a run ends, the
+client aborts all requests of the run that are in flight.
 
 | Status | Meaning | What the client does |
 | --- | --- | --- |

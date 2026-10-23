@@ -19,6 +19,7 @@ src/
     worker-host.ts            the engine host that runs inside the worker
     capability-bridge.ts      installs the guest functions for each capability
     guest-timers.ts           setTimeout & co. on virtual time, inside the worker
+    engine-async.ts           async engine calls for promise jobs and timer callbacks
   js-worker.ts                the worker script, bundled into dist/js-worker.js
 ```
 
@@ -46,7 +47,10 @@ declaration file names the engine.
   `invokeHost(method, args)`. They keep their backends and the proxy token
   on the main thread. A guest call suspends the engine. The worker sends
   the call as a `cap-call`, and the engine continues when the
-  `cap-result` comes back. The timer globals are part of the worker.
+  `cap-result` comes back. The engine can suspend in the script, in a
+  promise job and in a timer callback. The worker runs each of them
+  through an async engine call (`engine-async.ts`). The timer globals are
+  part of the worker.
   `TimerCapability` only switches them on or off.
 - **`RuntimeFacade`** takes a map of runners
   (`Record<string, CodeRunner>`). It owns the active mode and the output

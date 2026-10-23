@@ -2,6 +2,12 @@ import type { OutputEntry } from '../shared/sandbox-types.js';
 import type { CapabilityStubInfo } from '../capabilities/capability.js';
 
 /**
+ * The message of a run that exceeded its time limit. The worker and the
+ * runner both use it, so that all timeouts look the same.
+ */
+export const TIMEOUT_MSG = 'Execution timed out: script exceeded the time limit.';
+
+/**
  * Per-run snapshot of one registered capability, sent to the JS worker.
  * The worker installs RPC bridge functions for enabled host-backed
  * capabilities. It supplies `timer` natively in the worker. It installs
@@ -41,4 +47,17 @@ export type JsWorkerToMainMsg =
       method: string;
       args: unknown[];
     }
-  | { type: 'done'; runId: number; success: boolean; error?: string; timedOut: boolean };
+  | {
+      type: 'done';
+      runId: number;
+      success: boolean;
+      error?: string;
+      timedOut: boolean;
+      /**
+       * True when the worker cannot start a fresh engine (its heap is
+       * spent). Only signals that the guest cannot forge set it. The text
+       * of `error` never sets it. The runner then replaces the worker and
+       * retries the run once.
+       */
+      exhausted?: boolean;
+    };

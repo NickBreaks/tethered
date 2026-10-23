@@ -81,12 +81,22 @@ export class MapDiskBackend implements DiskBackend {
   }
 }
 
+/**
+ * Makes the record key for a disk path. The result is absolute and has no
+ * empty, `.` or `..` segments and no trailing slash. A relative path starts
+ * at `/`. The function resolves `.` and `..` as POSIX does, but `..` at the
+ * root stays at the root. Thus `/a/../b` and `b` both become `/b`, and
+ * `/../x` becomes `/x`. Paths are only strings: no real file system is
+ * behind them.
+ */
 export function normalizePath(path: string): string {
-  let p = path;
-  if (!p.startsWith('/')) p = '/' + p;
-  p = p.replace(/\/+/g, '/');
-  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
-  return p;
+  const segments: string[] = [];
+  for (const segment of path.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') segments.pop();
+    else segments.push(segment);
+  }
+  return '/' + segments.join('/');
 }
 
 export class DiskCapability implements SandboxCapability {

@@ -111,4 +111,24 @@ describe('checkWorkerMessage', () => {
     expect(checkWorkerMessage({ ...base, error: 5 }).ok).toBe(false);
     expect(checkWorkerMessage({ ...base, runId: '1' }).ok).toBe(false);
   });
+
+  it('accepts done with a boolean exhausted flag and keeps it', () => {
+    const base = { type: 'done', runId: 1, success: false, timedOut: false, error: 'E' };
+    expect(checkWorkerMessage({ ...base, exhausted: true, extra: 1 })).toEqual({
+      ok: true,
+      msg: { ...base, exhausted: true },
+    });
+    expect(checkWorkerMessage({ ...base, exhausted: false })).toEqual({
+      ok: true,
+      msg: { ...base, exhausted: false },
+    });
+    expect(checkWorkerMessage(base)).toEqual({ ok: true, msg: base });
+  });
+
+  it('rejects done with a non-boolean exhausted flag', () => {
+    const base = { type: 'done', runId: 1, success: false, timedOut: false };
+    for (const exhausted of ['true', 1, null, {}]) {
+      expect(checkWorkerMessage({ ...base, exhausted }).ok).toBe(false);
+    }
+  });
 });

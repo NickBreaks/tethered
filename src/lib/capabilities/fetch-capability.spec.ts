@@ -96,7 +96,10 @@ describe('FetchCapability', () => {
       resp.status;
     `);
     expect(val).toBe(200);
-    expect(globalThis.fetch).toHaveBeenCalledWith('https://example.com', {});
+    // The request uses the parsed absolute URL, and carries an abort signal.
+    expect(globalThis.fetch).toHaveBeenCalledWith('https://example.com/', {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it('should return text body', async () => {
@@ -203,47 +206,47 @@ describe('FetchCapability', () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('Hello', { status: 200 }));
     const cap = new FetchCapability(makeStubProxyAuth());
     injectCap(vm, cap);
-    const val = await evalAndDump(`
-      fetch('https://example.com').then(function(r) { return r.text(); })._v;
+    const val = await evalAndDrain(`
+      fetch('https://example.com').then(function(r) { globalThis.out = r.text(); });
     `);
     expect(val).toBe('Hello');
-  });
+  }, 10_000);
 
   it('should support chained .then() calls', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('chained', { status: 200 }));
     const cap = new FetchCapability(makeStubProxyAuth());
     injectCap(vm, cap);
-    const val = await evalAndDump(`
+    const val = await evalAndDrain(`
       fetch('https://example.com')
         .then(function(r) { return r.text(); })
         .then(function(t) { return 'got: ' + t; })
-        ._v;
+        .then(function(v) { globalThis.out = v; });
     `);
     expect(val).toBe('got: chained');
-  });
+  }, 10_000);
 
   it('should support .then() on response for json extraction', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('{"a":1}', { status: 200 }));
     const cap = new FetchCapability(makeStubProxyAuth());
     injectCap(vm, cap);
-    const val = await evalAndDump(`
-      var result = fetch('https://example.com').then(function(r) { return r.json(); });
-      result._v.a;
+    const val = await evalAndDrain(`
+      fetch('https://example.com')
+        .then(function(r) { return r.json(); })
+        .then(function(d) { globalThis.out = d.a; });
     `);
     expect(val).toBe(1);
-  });
+  }, 10_000);
 
   it('should support .then() with status check', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 201 }));
     const cap = new FetchCapability(makeStubProxyAuth());
     injectCap(vm, cap);
-    const val = await evalAndDump(`
+    const val = await evalAndDrain(`
       fetch('https://example.com')
-        .then(function(r) { return r.status; })
-        ._v;
+        .then(function(r) { globalThis.out = r.status; });
     `);
     expect(val).toBe(201);
-  });
+  }, 10_000);
 
   it('should not expose __rawFetch on globalThis', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
@@ -979,6 +982,342 @@ describe('FetchCapability', () => {
           () => new FetchCapability(makeStubProxyAuth(), { denyHosts: ['.evil.net'] }),
         ).toThrow(/denyHosts/);
       });
+    });
+  });
+
+  // ---------------------------------------------------------------
+  // Promise behaviour of the guest response. The VM drains a bounded
+  // number of jobs, so a job chain that never ends fails the spec and
+  // does not hang it.
+  // ---------------------------------------------------------------
+
+  // Evaluates `code`, drains up to 10000 pending jobs, and returns the
+  // value of `globalThis.out`.
+  async function evalAndDrain(code: string): Promise<unknown> {
+    await evalAndDump(code);
+    const jobs = runtime.executePendingJobs(10_000);
+    if (jobs.error) {
+      const err = vm.dump(jobs.error);
+      jobs.error.dispose();
+      throw new Error(`Job failed: ${JSON.stringify(err)}`);
+    }
+    return evalAndDump('globalThis.out');
+  }
+
+  describe('await and promise chains on the guest response', () => {
+    it('await fetch(url) settles to a response, and await r.json() gives the data', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response('{"a":1}', { status: 200 }));
+      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
+      const val = await evalAndDrain(`
+        (async function () {
+          var r = await fetch('https://example.com/');
+          var d = await r.json();
+          globalThis.out = [r.status, r.ok, d.a];
+        })();
+      `);
+      expect(val).toEqual([200, true, 1]);
+    }, 10_000);
+
+    it('await fetch(url) then await r.text() gives the body', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response('hello', { status: 200 }));
+      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
+      const val = await evalAndDrain(`
+        (async function () {
+          var r = await fetch('https://example.com/');
+          globalThis.out = await r.text();
+        })();
+      `);
+      expect(val).toBe('hello');
+    }, 10_000);
+
+    it('the response thenable settles to a value that is not a thenable', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response('x', { status: 202 }));
+      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
+      const val = await evalAndDrain(`
+        Promise.resolve(fetch('https://example.com/')).then(function (r) {
+          globalThis.out = [typeof r.then, r.status];
+        });
+      `);
+      expect(val).toEqual(['undefined', 202]);
+    }, 10_000);
+
+    it('fetch(url).then(r => r.json()).then(...) runs as a promise chain', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response('{"n":7}', { status: 200 }));
+      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
+      const val = await evalAndDrain(`
+        fetch('https://example.com/')
+          .then(function (r) { return r.json(); })
+          .then(function (d) { globalThis.out = d.n * 2; });
+      `);
+      expect(val).toBe(14);
+    }, 10_000);
+
+    it('.catch() on the response chain gets an error thrown in a callback', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response('not json', { status: 200 }));
+      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
+      const val = await evalAndDrain(`
+        fetch('https://example.com/')
+          .then(function (r) { return r.json(); })
+          .catch(function (e) { globalThis.out = e instanceof SyntaxError; });
+      `);
+      expect(val).toBe(true);
+    }, 10_000);
+  });
+
+  // ---------------------------------------------------------------
+  // Response size limit and cancel of requests in flight.
+  // ---------------------------------------------------------------
+
+  describe('maxResponseBytes and cleanup()', () => {
+    function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
+      const enc = new TextEncoder();
+      let i = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (i < chunks.length) controller.enqueue(enc.encode(chunks[i++]));
+          else controller.close();
+        },
+      });
+    }
+
+    it('a body larger than maxResponseBytes fails with a clear error and cancels the stream', async () => {
+      let cancelled = false;
+      const enc = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(enc.encode('x'.repeat(64)));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+      const cap = new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: 100 });
+
+      await expect(cap.invokeHost('fetch', ['https://example.com/'])).rejects.toThrow(
+        /fetch failed: .*maxResponseBytes.*100/,
+      );
+      expect(cancelled).toBe(true);
+    });
+
+    it('a body at the limit is accepted, and multi-byte text is decoded across chunks', async () => {
+      // 'é' is 2 bytes in UTF-8. The split puts its bytes in two chunks.
+      const bytes = new TextEncoder().encode('abécd');
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes.slice(0, 3));
+          controller.enqueue(bytes.slice(3));
+          controller.close();
+        },
+      });
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+      const cap = new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: bytes.byteLength });
+
+      const raw = await cap.invokeHost('fetch', ['https://example.com/']);
+      expect(JSON.parse(String(raw)).body).toBe('abécd');
+    });
+
+    it('the default limit is 10 MiB', async () => {
+      const mib = 1024 * 1024;
+      globalThis.fetch = vi.fn().mockImplementation(async () =>
+        new Response(streamOf(Array.from({ length: 11 }, () => 'y'.repeat(mib))), { status: 200 }),
+      );
+      const cap = new FetchCapability(makeStubProxyAuth());
+      await expect(cap.invokeHost('fetch', ['https://example.com/'])).rejects.toThrow(
+        /maxResponseBytes/,
+      );
+
+      globalThis.fetch = vi.fn().mockImplementation(async () =>
+        new Response(streamOf(Array.from({ length: 10 }, () => 'y'.repeat(mib))), { status: 200 }),
+      );
+      const raw = await cap.invokeHost('fetch', ['https://example.com/']);
+      expect(JSON.parse(String(raw)).body.length).toBe(10 * mib);
+    }, 30_000);
+
+    it('the guest sees the size error as a fetch failure', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response('z'.repeat(50), { status: 200 }));
+      injectCap(vm, new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: 10 }));
+      const msg = String(await evalAndDump(`
+        try { fetch('https://example.com/'); 'no error'; } catch (e) { e.message; }
+      `));
+      expect(msg).toContain('fetch failed');
+      expect(msg).toContain('maxResponseBytes');
+    });
+
+    it('an invalid maxResponseBytes throws a TypeError at construction', () => {
+      const auth = makeStubProxyAuth();
+      for (const bad of [0, -1, 1.5, NaN, Infinity, '100', null]) {
+        expect(
+          () => new FetchCapability(auth, { maxResponseBytes: bad as unknown as number }),
+          String(bad),
+        ).toThrow(TypeError);
+      }
+      expect(() => new FetchCapability(auth, { maxResponseBytes: 1 })).not.toThrow();
+    });
+
+    it('cleanup() aborts every request in flight (direct and proxy)', async () => {
+      const signals: AbortSignal[] = [];
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init.signal!;
+            signals.push(signal);
+            signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          }),
+      );
+      const direct = new FetchCapability(makeStubProxyAuth());
+      const proxied = new FetchCapability(proxyAuthWithToken());
+
+      const calls = [
+        direct.invokeHost('fetch', ['https://a.example/']),
+        direct.invokeHost('fetch', ['https://b.example/']),
+        proxied.invokeHost('fetch', ['https://c.example/']),
+      ];
+      await vi.waitFor(() => expect(signals).toHaveLength(3));
+      expect(signals.some((s) => s.aborted)).toBe(false);
+
+      direct.cleanup();
+      proxied.cleanup();
+
+      expect(signals.every((s) => s.aborted)).toBe(true);
+      for (const call of calls) await expect(call).rejects.toThrow(/fetch failed/);
+    });
+
+    it('cleanup() also stops a body read that is in progress', async () => {
+      // The body never ends, and it ignores the signal. Only a cancel of
+      // the reader can stop the read.
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('part'));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      globalThis.fetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+      const cap = new FetchCapability(makeStubProxyAuth());
+      const call = cap.invokeHost('fetch', ['https://example.com/']);
+      await new Promise((r) => setTimeout(r, 20));
+      cap.cleanup();
+      await expect(call).rejects.toThrow(/fetch failed/);
+      expect(cancelled).toBe(true);
+    }, 10_000);
+  });
+
+  // ---------------------------------------------------------------
+  // Proxy URL join and URL resolution.
+  // ---------------------------------------------------------------
+
+  describe('proxy URL and URL resolution', () => {
+    async function proxyCallFor(base: string): Promise<string> {
+      const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+      globalThis.fetch = spy;
+      const cap = new FetchCapability(
+        makeStubProxyAuth({ proxyBase: () => base, authHeader: () => `Bearer ${TOKEN}` }),
+      );
+      await cap.invokeHost('fetch', ['https://api.example.com/data']);
+      expect(spy).toHaveBeenCalledTimes(1);
+      return String(spy.mock.calls[0][0]);
+    }
+
+    it('the proxy URL is joined with one slash', async () => {
+      const origin = window.location.origin;
+      expect(await proxyCallFor('')).toBe(`${origin}/proxy/fetch`);
+      expect(await proxyCallFor('/')).toBe(`${origin}/proxy/fetch`);
+      expect(await proxyCallFor('//')).toBe(`${origin}/proxy/fetch`);
+      expect(await proxyCallFor('/sub/')).toBe(`${origin}/sub/proxy/fetch`);
+      expect(await proxyCallFor('https://proxy.example.com')).toBe('https://proxy.example.com/proxy/fetch');
+      expect(await proxyCallFor('https://proxy.example.com/')).toBe('https://proxy.example.com/proxy/fetch');
+      expect(await proxyCallFor('https://proxy.example.com//')).toBe('https://proxy.example.com/proxy/fetch');
+      expect(await proxyCallFor('https://proxy.example.com/base/')).toBe(
+        'https://proxy.example.com/base/proxy/fetch',
+      );
+    });
+
+    it('the token goes only to the host of the proxy base', async () => {
+      const page = window.location.href;
+      const cases: [string, string][] = [
+        ['', window.location.host],
+        ['/', window.location.host],
+        ['//', window.location.host],
+        ['/sub/', window.location.host],
+        ['https://proxy.example.com/', 'proxy.example.com'],
+        ['https://proxy.example.com:8443//', 'proxy.example.com:8443'],
+      ];
+      for (const [base, host] of cases) {
+        const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+        globalThis.fetch = spy;
+        const cap = new FetchCapability(
+          makeStubProxyAuth({ proxyBase: () => base, authHeader: () => `Bearer ${TOKEN}` }),
+        );
+        await cap.invokeHost('fetch', ['https://api.example.com/data']);
+        const [target, init] = spy.mock.calls[0];
+        expect(init.headers['X-Proxy-Authorization']).toBe(`Bearer ${TOKEN}`);
+        expect(new URL(String(target), page).host, JSON.stringify(base)).toBe(host);
+      }
+    });
+
+    describe('with a <base> element', () => {
+      let baseEl: HTMLBaseElement;
+      beforeEach(() => {
+        baseEl = document.createElement('base');
+        baseEl.href = 'https://cdn.example.net/assets/';
+        document.head.appendChild(baseEl);
+      });
+      afterEach(() => {
+        baseEl.remove();
+      });
+
+      it('a relative URL resolves against document.baseURI for the request and the route', async () => {
+        const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+        globalThis.fetch = spy;
+        const cap = new FetchCapability(
+          makeStubProxyAuth({ proxyBase: () => '', authHeader: () => `Bearer ${TOKEN}` }),
+        );
+        await cap.invokeHost('fetch', ['data.json']);
+        // The resolved URL is cross-origin. Thus the request goes to the
+        // proxy, with the absolute URL.
+        // The proxy URL resolves against the page, not the <base>, so the
+        // token does not go to cdn.example.net.
+        const [target, init] = spy.mock.calls[0];
+        expect(target).toBe(`${window.location.origin}/proxy/fetch`);
+        expect(init.headers['X-Proxy-Authorization']).toBe(`Bearer ${TOKEN}`);
+        expect(JSON.parse(init.body).url).toBe('https://cdn.example.net/assets/data.json');
+      });
+
+      it('without a proxy, the direct request uses the same resolved URL', async () => {
+        const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+        globalThis.fetch = spy;
+        const cap = new FetchCapability(makeStubProxyAuth());
+        await cap.invokeHost('fetch', ['data.json']);
+        expect(spy.mock.calls[0][0]).toBe('https://cdn.example.net/assets/data.json');
+      });
+
+      it('the host policy examines the URL that resolves against document.baseURI', async () => {
+        const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+        globalThis.fetch = spy;
+        const cap = new FetchCapability(makeStubProxyAuth(), {
+          allowHosts: [window.location.hostname],
+        });
+        await expect(cap.invokeHost('fetch', ['data.json'])).rejects.toThrow(
+          /cdn\.example\.net.*not allowed/,
+        );
+        expect(spy).not.toHaveBeenCalled();
+      });
+    });
+
+    it('a relative same-origin URL goes direct with the resolved absolute URL', async () => {
+      const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+      globalThis.fetch = spy;
+      const cap = new FetchCapability(
+        makeStubProxyAuth({
+          proxyBase: () => 'https://proxy.example.com',
+          authHeader: () => `Bearer ${TOKEN}`,
+        }),
+      );
+      await cap.invokeHost('fetch', ['/api/local']);
+      expect(spy.mock.calls[0][0]).toBe(`${window.location.origin}/api/local`);
     });
   });
 }, 30000);

@@ -4,17 +4,17 @@ import type { CapabilityStore } from '../capabilities/capability-store.js';
 import type { CapabilityStubInfo } from '../capabilities/capability.js';
 import type { OutputEntry, ExecutionResult } from '../shared/sandbox-types.js';
 import type { CodeRunner, ExecuteOptions } from '../shared/code-runner.js';
-import type {
-  JsCapabilitySnapshot,
-  JsMainToWorkerMsg,
-  JsWorkerToMainMsg,
+import {
+  TIMEOUT_MSG,
+  type JsCapabilitySnapshot,
+  type JsMainToWorkerMsg,
+  type JsWorkerToMainMsg,
 } from './worker-protocol.js';
 import { checkWorkerMessage } from './check-worker-message.js';
 
 export type { OutputEntry, ExecutionResult } from '../shared/sandbox-types.js';
 
 const ABORT_MSG = 'Execution aborted.';
-const TIMEOUT_MSG = 'Execution timed out: script exceeded the time limit.';
 const SUPERSEDED_MSG = 'Execution superseded by a newer run.';
 
 /**
@@ -29,13 +29,27 @@ const BACKSTOP_GRACE_MS = 2000;
 
 const DEFAULT_BOOT_TIMEOUT_MS = 30_000;
 
+/** The largest delay that `setTimeout` accepts. A larger delay fires at once. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 /**
- * Errors that mean the worker's heap is spent, not that the code was
- * wrong. A spent heap causes all later runs to fail, and even capability
- * setup scripts fail. Thus the runner replaces the worker and retries the
- * run once.
+ * Returns an error message when `value` is not a usable time limit, else
+ * null. A time limit must be a finite number greater than 0. With `grace`
+ * added, it must also fit in a `setTimeout` delay.
  */
-const EXHAUSTED = /out of memory|setup failed|InternalError/i;
+function timeLimitProblem(name: string, value: unknown, grace: number): string | null {
+  const max = MAX_TIMER_DELAY_MS - grace;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= max) {
+    return null;
+  }
+  return `${name} must be a finite number greater than 0 and at most ${max} (got ${String(value)}).`;
+}
+
+function checkTimeLimit(name: string, value: unknown, grace: number): number {
+  const problem = timeLimitProblem(name, value, grace);
+  if (problem !== null) throw new RangeError(problem);
+  return value as number;
+}
 
 /**
  * The guest functions that the worker installs for a capability. This
@@ -61,6 +75,12 @@ export interface JsRunnerOptions {
    * worker-script export (see the README).
    */
   workerFactory: () => Worker;
+  /**
+   * Per-run time limit (ms). Defaults to 5000. It must be a finite number
+   * greater than 0 and at most 2147481647 (the backstop adds 2000 ms, and
+   * the sum must fit in a `setTimeout` delay). Else the constructor throws
+   * a `RangeError`.
+   */
   timeoutMs?: number;
   /**
    * What `execute()` does while a run is in flight. `'supersede'`
@@ -80,14 +100,18 @@ export interface JsRunnerOptions {
    */
   recycleAfterRuns?: number;
   /**
-   * When a run fails with a heap-exhaustion error, respawn the worker and
-   * retry the run once on the fresh one. Defaults to `true`.
+   * When the worker reports that its heap is spent, respawn the worker and
+   * retry the run once on the fresh one. Only the worker can report this,
+   * from signals that the guest cannot forge. The error text of the guest
+   * never causes a retry. Defaults to `true`.
    */
   recoverExhaustion?: boolean;
   /**
    * How long a new worker can take to report ready (ms). After this time,
    * the worker is terminated and the boot fails as a load error does:
-   * `initialize()` rejects and `initError` is set. Defaults to 30000.
+   * `initialize()` rejects and `initError` is set. Defaults to 30000. It
+   * must be a finite number greater than 0 and at most 2147483647. Else
+   * the constructor throws a `RangeError`.
    */
   bootTimeoutMs?: number;
 }
@@ -99,12 +123,18 @@ export interface RunInfo {
   timeoutMs: number;
 }
 
+/** A settled run, and whether the worker reported that its heap is spent. */
+interface RunOutcome {
+  result: ExecutionResult;
+  exhausted: boolean;
+}
+
 interface ActiveJsRun {
   runId: number;
   tag: string;
   output: OutputEntry[];
   startTime: number;
-  resolve: (r: ExecutionResult) => void;
+  resolve: (outcome: RunOutcome) => void;
   backstopHandle: ReturnType<typeof setTimeout> | null;
   enabledCaps: { cleanup?(): void | Promise<void> }[];
 }
@@ -148,8 +178,20 @@ export class JsRunner implements CodeRunner {
   readonly #run = createEmitter<RunInfo | null>();
   readonly #recycle = createEmitter<string>();
 
-  /** Per-run time limit; read at the start of every run. */
-  timeoutMs: number;
+  #timeoutMs: number;
+
+  /**
+   * Per-run time limit (ms). The runner reads it at the start of every
+   * run. The setter throws a `RangeError` for a value that is not a
+   * finite number greater than 0 and at most 2147481647.
+   */
+  get timeoutMs(): number {
+    return this.#timeoutMs;
+  }
+
+  set timeoutMs(value: number) {
+    this.#timeoutMs = checkTimeLimit('timeoutMs', value, BACKSTOP_GRACE_MS);
+  }
 
   readonly #registry: CapabilityStore;
   readonly #workerFactory: () => Worker;
@@ -177,11 +219,15 @@ export class JsRunner implements CodeRunner {
   constructor(registry: CapabilityStore, options: JsRunnerOptions) {
     this.#registry = registry;
     this.#workerFactory = options.workerFactory;
-    this.timeoutMs = options.timeoutMs ?? 5000;
+    this.#timeoutMs = checkTimeLimit('timeoutMs', options.timeoutMs ?? 5000, BACKSTOP_GRACE_MS);
     this.#concurrency = options.concurrency ?? 'supersede';
     this.#recycleAfterRuns = options.recycleAfterRuns ?? 0;
     this.#recoverExhaustion = options.recoverExhaustion ?? true;
-    this.#bootTimeoutMs = options.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
+    this.#bootTimeoutMs = checkTimeLimit(
+      'bootTimeoutMs',
+      options.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS,
+      0,
+    );
   }
 
   onOutput(fn: (entry: OutputEntry) => void): () => void {
@@ -199,7 +245,7 @@ export class JsRunner implements CodeRunner {
   /**
    * Called when the worker is replaced outside abort/timeout: with
    * `'periodic'` for `recycleAfterRuns`, or with the run's error message
-   * after a heap-exhaustion failure.
+   * after the worker reported a spent heap.
    */
   onRecycle(fn: (reason: string) => void): () => void {
     return this.#recycle.subscribe(fn);
@@ -234,9 +280,25 @@ export class JsRunner implements CodeRunner {
     }
   }
 
+  /**
+   * Runs `code` and settles with its result. It never rejects. A
+   * `timeoutMs` option that is not a finite number greater than 0 and at
+   * most 2147481647 settles the run as a failure at once. That run does
+   * not start, and the run in flight continues.
+   */
   execute(code: string, options: ExecuteOptions = {}): Promise<ExecutionResult> {
-    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
+    const timeoutMs = options.timeoutMs ?? this.#timeoutMs;
     const tag = options.tag ?? '';
+    const problem = timeLimitProblem('timeoutMs', timeoutMs, BACKSTOP_GRACE_MS);
+    if (problem !== null) {
+      return Promise.resolve({
+        success: false,
+        output: [{ type: 'system', content: problem, timestamp: Date.now() }],
+        error: problem,
+        timedOut: false,
+        durationMs: 0,
+      });
+    }
     if (this.#concurrency === 'supersede') {
       const ticket = ++this.#requestSeq;
       // Settle the runs that this one takes over now, so that their promises
@@ -346,7 +408,7 @@ export class JsRunner implements CodeRunner {
     const worker = this.#worker;
     this.#runsSinceSpawn++;
 
-    const result = await new Promise<ExecutionResult>((resolve) => {
+    const { result, exhausted } = await new Promise<RunOutcome>((resolve) => {
       const backstopHandle = setTimeout(
         () => this.#kill(runId, 'timeout'),
         timeoutMs + BACKSTOP_GRACE_MS,
@@ -373,14 +435,14 @@ export class JsRunner implements CodeRunner {
       this.#output.emit(sysEntry);
     });
 
-    // Recover only when the worker of this run reported the error.
+    // Recover only when the worker of this run reported a spent heap.
     // Otherwise, a kill already replaced the worker and reported its own
     // failure.
     if (
       this.#recoverExhaustion &&
+      exhausted &&
       !result.success &&
       !result.timedOut &&
-      EXHAUSTED.test(result.error ?? '') &&
       this.#worker === worker &&
       !this.#disposed
     ) {
@@ -586,11 +648,14 @@ export class JsRunner implements CodeRunner {
     this.#cleanupCaps(enabledCaps);
 
     resolve({
-      success: msg.success,
-      output,
-      ...(msg.error !== undefined ? { error: msg.error } : {}),
-      timedOut: msg.timedOut,
-      durationMs: Date.now() - startTime,
+      result: {
+        success: msg.success,
+        output,
+        ...(msg.error !== undefined ? { error: msg.error } : {}),
+        timedOut: msg.timedOut,
+        durationMs: Date.now() - startTime,
+      },
+      exhausted: msg.exhausted === true,
     });
   }
 
@@ -616,11 +681,14 @@ export class JsRunner implements CodeRunner {
     this.#cleanupCaps(enabledCaps);
 
     resolve({
-      success: false,
-      output,
-      error: msg,
-      timedOut: reason === 'timeout',
-      durationMs: Date.now() - startTime,
+      result: {
+        success: false,
+        output,
+        error: msg,
+        timedOut: reason === 'timeout',
+        durationMs: Date.now() - startTime,
+      },
+      exhausted: false,
     });
   }
 
@@ -651,11 +719,14 @@ export class JsRunner implements CodeRunner {
     this.#cleanupCaps(enabledCaps);
 
     resolve({
-      success: false,
-      output,
-      error: SUPERSEDED_MSG,
-      timedOut: false,
-      durationMs: Date.now() - startTime,
+      result: {
+        success: false,
+        output,
+        error: SUPERSEDED_MSG,
+        timedOut: false,
+        durationMs: Date.now() - startTime,
+      },
+      exhausted: false,
     });
   }
 

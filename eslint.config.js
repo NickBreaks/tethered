@@ -12,11 +12,15 @@ const NO_PACKAGES_IN_CORE = {
   message: 'The core entry has no dependencies; the engine is imported only by src/workers/.',
 };
 
-// The workers reach the core only through its public entry.
-const CORE_PUBLIC_ENTRY_ONLY = {
-  group: ['../lib/**', '../../lib/**'],
-  message: "Import the core from its public entry ('../index.js'), not from src/lib/.",
-};
+// The workers import only the core modules that make the worker contract:
+// the protocol, the shared types and helpers, and the capability stub
+// type. They do not import the core entry. That entry pulls in the runner
+// and all capabilities.
+const workerCoreImports = (up) => ({
+  regex: `^${up.replaceAll('.', '\\.')}(index(\\.js)?$|lib/(?!shared/|js/worker-protocol\\.js$|capabilities/capability\\.js$))`,
+  message:
+    'Worker modules import only lib/shared/, lib/js/worker-protocol.js and lib/capabilities/capability.js from the core.',
+});
 
 export default tseslint.config(
   {
@@ -48,7 +52,13 @@ export default tseslint.config(
     files: ['src/workers/**/*.ts'],
     ignores: ['**/*.spec.ts'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [CORE_PUBLIC_ENTRY_ONLY] }],
+      'no-restricted-imports': ['error', { patterns: [workerCoreImports('../')] }],
+    },
+  },
+  {
+    files: ['src/js-worker.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [workerCoreImports('./')] }],
     },
   },
 );

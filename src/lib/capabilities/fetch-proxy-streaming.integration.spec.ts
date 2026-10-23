@@ -13,11 +13,15 @@
  *      a TypeError (`TypeError: Failed to fetch` or the Chromium
  *      equivalent). QuickJS must show that as `fetch failed: ...`.
  *
- *   2. Upstream returns a large body (11 MB in a single chunk). The
- *      client receives all of it. This verifies that the VM-side
- *      surface can consume an oversized response and not crash. The
- *      SERVER enforces the cap. Here we only verify the client
- *      plumbing.
+ *   2. Upstream returns a large body (11 MB in a single chunk), and
+ *      `maxResponseBytes` is larger. The client receives all of it.
+ *      This verifies that the VM-side surface can consume a large
+ *      response and not crash.
+ *
+ *   3. Upstream streams a body that does not end. The client stops at
+ *      the default `maxResponseBytes` (10 MiB) and cancels the stream.
+ *
+ *   4. A relative URL resolves against the `<base>` element.
  *
  * Run with: npm run test:integration
  */
@@ -136,7 +140,8 @@ describe('fetch-proxy-streaming integration', () => {
         headers: { 'Content-Type': 'text/plain' },
       });
 
-    const cap = new FetchCapability(makeStubProxyAuth());
+    // The default limit is 10 MiB. Set a larger limit for this body.
+    const cap = new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: 12 * 1024 * 1024 });
     injectCap(vm, cap);
 
     const len = await evalAndDump(vm, `
@@ -146,4 +151,55 @@ describe('fetch-proxy-streaming integration', () => {
 
     expect(len).toBe(payload.length);
   }, 120_000);
+
+  it('a streamed body larger than the default 10 MiB limit fails and is cancelled', async () => {
+    let cancelled = false;
+    let sent = 0;
+    const chunk = new Uint8Array(1024 * 1024).fill(120);
+    globalThis.fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            sent += chunk.byteLength;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 200 },
+      );
+
+    const cap = new FetchCapability(makeStubProxyAuth());
+    injectCap(vm, cap);
+
+    const val = await evalAndDump(vm, `
+      try { fetch('https://example.com/endless').text(); 'no error'; } catch (e) { e.message; }
+    `);
+
+    expect(String(val)).toContain('fetch failed');
+    expect(String(val)).toContain('maxResponseBytes');
+    expect(cancelled).toBe(true);
+    // The host stops soon after the limit. It does not read the stream to its end.
+    expect(sent).toBeLessThan(16 * 1024 * 1024);
+  }, 60_000);
+
+  it('a relative URL resolves against the <base> element, as the page fetch does', async () => {
+    const base = document.createElement('base');
+    base.href = 'https://cdn.example.net/assets/';
+    document.head.appendChild(base);
+    const urls: string[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response('ok', { status: 200 });
+    };
+    try {
+      const cap = new FetchCapability(makeStubProxyAuth());
+      injectCap(vm, cap);
+      await evalAndDump(vm, `fetch('data.json').status;`);
+    } finally {
+      base.remove();
+    }
+    expect(urls).toEqual(['https://cdn.example.net/assets/data.json']);
+  }, 60_000);
 });

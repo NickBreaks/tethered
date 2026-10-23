@@ -1,5 +1,5 @@
 import { JsWorkerHost } from './workers/worker-host.js';
-import type { JsMainToWorkerMsg, JsWorkerToMainMsg } from './index.js';
+import type { JsMainToWorkerMsg, JsWorkerToMainMsg } from './lib/js/worker-protocol.js';
 
 /**
  * The dedicated-worker globals that this module uses. They are declared

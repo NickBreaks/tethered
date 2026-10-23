@@ -13,6 +13,22 @@ This page tells about:
 | Member | What it does |
 | --- | --- |
 | `execute(code, { timeoutMs?, tag? })` | `timeoutMs` overrides the `timeoutMs` of the runner for this run only. `tag` (default `''`) names the caller. `facade.execute` / `facade.run` send the same options to the runner. |
+
+The JS runner accepts a time limit only if it is a finite number greater
+than 0 and at most 2147481647 ms. The backstop adds 2000 ms, and the sum
+must fit in a `setTimeout` delay. These rules apply to:
+
+- the `timeoutMs` option of the constructor and of `createSandboxRuntime()`
+  (else it throws a `RangeError`);
+- the `timeoutMs` property of the runner (else the setter throws a
+  `RangeError`, and the old value stays);
+- the `timeoutMs` option of `execute()`. Else the run settles at once
+  with `success: false`, `timedOut: false` and the rule as `error`. That
+  run does not start, and the run in flight continues. `execute()` never
+  rejects.
+
+`bootTimeoutMs` must be a finite number greater than 0 and at most
+2147483647 ms. Else the constructor throws a `RangeError`.
 | `activeTag: ReadableValue<string \| null>` | The tag of the run in flight. It is `null` between runs. Host capabilities can read it inside `invokeHost()` to find who started the run. |
 | `onOutput(fn) => unsubscribe` | The runner calls `fn` for each entry when it adds the entry to the `output` of a started run. Thus, `fn` gets the same entries as the result, in the same order. |
 
@@ -33,7 +49,19 @@ the top level to `createSandboxRuntime()`:
 | --- | --- | --- | --- |
 | `concurrency` | `jsConcurrency` | `'supersede'` | `'supersede'`: an overlapping run replaces the current run, on a fresh worker (refer to the subsequent text). `'queue'`: each run starts after all earlier runs settle (finish, fail, time out or abort). |
 | `recycleAfterRuns` | `jsRecycleAfterRuns` | off | After N runs on one worker, the next run first replaces the worker. |
-| `recoverExhaustion` | `jsRecoverExhaustion` | `true` | If a run fails with `/out of memory\|setup failed\|InternalError/i` (not a timeout), the runner replaces the worker and tries the run one more time. If the second try fails in the same way, the runner replaces the worker again and returns that failure. |
+| `recoverExhaustion` | `jsRecoverExhaustion` | `true` | If the worker reports that its heap is spent (refer to the subsequent text), the runner replaces the worker and tries the run one more time. If the second try fails in the same way, the runner replaces the worker again and returns that failure. |
+
+**Spent heap.** The worker sets the `exhausted` flag of its `done`
+message only for signals that the guest cannot forge:
+
+- the engine runtime, its context or a capability setup fails before the
+  guest code starts;
+- the run fails with an out-of-memory error, and after the run the worker
+  cannot start a fresh engine.
+
+The error text alone never causes a retry. Thus a guest that throws
+`new Error('out of memory')` or overflows its stack does not run two
+times.
 
 JS-only subscriptions and state:
 

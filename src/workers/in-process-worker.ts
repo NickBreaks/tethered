@@ -1,5 +1,5 @@
 import type { JsWorkerHost } from './worker-host.js';
-import type { JsMainToWorkerMsg, JsWorkerToMainMsg } from '../index.js';
+import type { JsMainToWorkerMsg, JsWorkerToMainMsg } from '../lib/js/worker-protocol.js';
 
 type MessageListener = (event: MessageEvent<JsWorkerToMainMsg>) => void;
 

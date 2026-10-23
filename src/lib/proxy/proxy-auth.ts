@@ -6,11 +6,11 @@ export type ProxyAuthLike = Pick<ProxyAuth, 'proxyBase' | 'authHeader' | 'invali
 /**
  * Owns the CORS proxy bearer token.
  *
- * `corsProxyUrl` has three states. They come from the legacy
- * `environment.corsProxyUrl` field (see proxyBase tests A-01..A-03):
+ * `corsProxyUrl` has three states:
  *  - `''`   — dev default; same-origin `/proxy/fetch` through the dev-server proxy.
  *  - `null` — proxy disabled.
- *  - any absolute URL string — that URL is the proxy base.
+ *  - any absolute URL string — that URL is the proxy base. FetchCapability
+ *    removes trailing slashes before it adds `/proxy/fetch`.
  *
  * Invariants:
  *  - `authHeader()` reads sessionStorage on every call. There is no
@@ -20,9 +20,9 @@ export type ProxyAuthLike = Pick<ProxyAuth, 'proxyBase' | 'authHeader' | 'invali
  *  - Only sessionStorage is ever referenced. localStorage is forbidden
  *    so the token never outlives the browser tab.
  *  - `proxyBase()` uses an explicit null/undefined check. Thus the empty
- *    string (dev mode, same-origin `/proxy/fetch`) does NOT become null
- *    (Spec Mod #1).
- *  - `setToken()` trims whitespace before storing (Spec Mod #6 / U-01).
+ *    string (dev mode, same-origin `/proxy/fetch`) does NOT become null.
+ *  - `setToken()` removes whitespace at the start and end of the token
+ *    before it stores the token.
  */
 export class ProxyAuth {
   private static readonly TOKEN_KEY = 'cors_proxy_auth_token';

@@ -26,7 +26,18 @@ export interface FetchCapabilityOptions {
   readonly allowHosts?: readonly string[];
   /** These hosts are always refused, even when they match `allowHosts`. */
   readonly denyHosts?: readonly string[];
+  /**
+   * The maximum size of a response body, in bytes. The host reads the
+   * body on the main thread, outside the memory limit of the worker. If
+   * the body is larger, the host stops the read and the guest `fetch`
+   * fails. It must be a positive integer. The default is 10 MiB
+   * (10485760).
+   */
+  readonly maxResponseBytes?: number;
 }
+
+/** The default of {@link FetchCapabilityOptions.maxResponseBytes}: 10 MiB. */
+const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 /** A normalized host list: exact hostnames plus `*.` wildcard suffixes. */
 interface HostList {
@@ -39,27 +50,38 @@ interface HostList {
  * Fetch capability that routes cross-origin requests through the CORS
  * proxy when one is configured.
  *
- * Routing decision (Flow C):
+ * URL resolution: the capability parses the guest URL one time with the
+ * WHATWG URL parser. It resolves a relative URL against
+ * `document.baseURI` when a document exists, else against
+ * `location.href`. The routing decision and the request both use this
+ * absolute URL.
+ *
+ * Routing decision:
  *   1. If proxyAuth.proxyBase() is null, the proxy is disabled. Call
- *      globalThis.fetch directly (AC #49 direct-fetch fallback).
- *   2. If the request URL resolves to the same origin as the current
- *      page, call globalThis.fetch directly. Ignore proxyBase.
+ *      globalThis.fetch directly.
+ *   2. If the URL has the same origin as the current page, call
+ *      globalThis.fetch directly. Ignore proxyBase.
  *   3. Otherwise, read proxyAuth.authHeader(). Then POST the request to
- *      `${base}/proxy/fetch`, with the destination URL/method/headers/body
- *      in the JSON body. If the token is missing, the capability
- *      invalidates the service and throws the locked Spec Mod #5 error
- *      string. This error string opens the modal.
+ *      `/proxy/fetch` under the proxy base, with the destination
+ *      URL/method/headers/body in the JSON body. If the token is missing,
+ *      the capability invalidates the token and throws an error. The
+ *      host app can show a token prompt when the token is invalid.
  *   4. A 401 response from the proxy invalidates the token and throws
  *      a "CORS proxy rejected the token" error.
  *
  * Host policy: with `allowHosts`, `denyHosts` or both, the capability
- * parses each request URL with the WHATWG URL parser. It resolves
- * relative URLs against the page. It checks the URL BEFORE the routing
- * above, so a refused URL never reaches globalThis.fetch, the proxy or
- * the auth header. Only http(s) URLs pass. The check compares the full
- * hostname, never a substring. If both lists match, deny wins. The
- * constructor copies the lists, and the lists never reach the guest.
- * With neither option, the capability does not examine the URL.
+ * checks the resolved URL BEFORE the routing above. Thus a refused URL
+ * never reaches globalThis.fetch, the proxy or the auth header. Only
+ * http(s) URLs pass. The check compares the full hostname, never a
+ * substring. If both lists match, deny wins. The constructor copies the
+ * lists, and the lists never reach the guest. With neither option, the
+ * capability does not limit the URL.
+ *
+ * Body and cancel: the host reads the response body as a stream and
+ * counts the bytes. A body larger than `maxResponseBytes` fails the
+ * request. Each request has an AbortController. `cleanup()` aborts all
+ * requests in flight. The runner calls it when a run ends, also when a
+ * run is aborted, times out or is superseded.
  *
  * Token-isolation invariant: the auth header is read only INSIDE
  * invokeHost, on the main thread. It never crosses the worker boundary.
@@ -67,10 +89,12 @@ interface HostList {
  * The exfiltration specs in fetch-capability.spec.ts are regression tests
  * for this.
  *
- * The worker injects the raw bridge as the global `fetch`. Then
- * setupScript wraps it into a thenable response object. Thus .then()
- * chaining, sync access (resp.text()) and await all work as agents/LLMs
- * expect.
+ * Guest API: the worker injects the raw bridge as the global `fetch`.
+ * Then setupScript wraps it. The guest call is synchronous and returns a
+ * response object. Thus `fetch(u).text()` works. The response object is
+ * also a thenable. Its `then`, `catch` and `finally` use a real Promise
+ * that settles to a copy of the response without these three methods.
+ * Thus `await fetch(u)` and `fetch(u).then(...)` settle and do not loop.
  */
 export class FetchCapability implements SandboxCapability {
   readonly name = 'fetch';
@@ -79,31 +103,32 @@ export class FetchCapability implements SandboxCapability {
 
   readonly setupScript = `(function() {
     var rawFetch = globalThis.fetch;
+    var P = Promise;
 
-    function __wrapThenable(v) {
-      if (v && typeof v === 'object' && typeof v.then === 'function') return v;
+    function makeResponse(d) {
       return {
-        _v: v,
-        then: function(f, r) {
-          try { return __wrapThenable(f(this._v)); }
-          catch (e) { if (r) return __wrapThenable(r(e)); throw e; }
-        }
-      };
-    }
-
-    globalThis.fetch = function fetch(url, options) {
-      var raw = rawFetch(url, options || {});
-      var d = JSON.parse(raw);
-      var resp = {
         status: d.status,
         ok: d.ok,
         statusText: d.statusText,
         text: function() { return d.body; },
-        json: function() { return JSON.parse(d.body); },
-        then: function(f, r) {
-          try { return __wrapThenable(f(resp)); }
-          catch (e) { if (r) return __wrapThenable(r(e)); throw e; }
-        }
+        json: function() { return JSON.parse(d.body); }
+      };
+    }
+
+    globalThis.fetch = function fetch(url, options) {
+      var d = JSON.parse(rawFetch(url, options || {}));
+      // The settled value has no then. Thus a Promise that adopts the
+      // response settles after one step.
+      var settled = makeResponse(d);
+      var resp = makeResponse(d);
+      resp.then = function(onFulfilled, onRejected) {
+        return P.resolve(settled).then(onFulfilled, onRejected);
+      };
+      resp.catch = function(onRejected) {
+        return P.resolve(settled).catch(onRejected);
+      };
+      resp.finally = function(onFinally) {
+        return P.resolve(settled).finally(onFinally);
       };
       return resp;
     };
@@ -111,6 +136,9 @@ export class FetchCapability implements SandboxCapability {
 
   readonly #allow: HostList | null;
   readonly #deny: HostList | null;
+  readonly #maxResponseBytes: number;
+  /** One controller for each request in flight. `cleanup()` aborts them. */
+  readonly #inFlight = new Set<AbortController>();
 
   constructor(
     private readonly proxyAuth: ProxyAuthLike,
@@ -121,9 +149,22 @@ export class FetchCapability implements SandboxCapability {
     }
     // Only an absent list means "no policy". Any other value that is not an
     // array (null, a string) throws. It does not silently fail open.
-    const { allowHosts, denyHosts } = options;
+    const { allowHosts, denyHosts, maxResponseBytes } = options;
     this.#allow = allowHosts !== undefined ? toHostList(allowHosts, 'allowHosts') : null;
     this.#deny = denyHosts !== undefined ? toHostList(denyHosts, 'denyHosts') : null;
+    if (
+      maxResponseBytes !== undefined &&
+      !(Number.isSafeInteger(maxResponseBytes) && maxResponseBytes > 0)
+    ) {
+      throw new TypeError('FetchCapability maxResponseBytes must be a positive integer.');
+    }
+    this.#maxResponseBytes = maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  }
+
+  /** Aborts all requests in flight. The runner calls this when a run ends. */
+  cleanup(): void {
+    for (const controller of this.#inFlight) controller.abort();
+    this.#inFlight.clear();
   }
 
   async invokeHost(method: string, args: unknown[]): Promise<unknown> {
@@ -142,9 +183,11 @@ export class FetchCapability implements SandboxCapability {
       };
     }
 
+    const controller = new AbortController();
+    this.#inFlight.add(controller);
     try {
-      const response = await this.doFetch(this.checkHost(url), options);
-      const bodyText = await response.text();
+      const response = await this.doFetch(this.checkHost(url), options, controller.signal);
+      const bodyText = await this.readBody(response, controller.signal);
       return JSON.stringify({
         status: response.status,
         ok: response.ok,
@@ -154,27 +197,77 @@ export class FetchCapability implements SandboxCapability {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`fetch failed: ${msg}`);
+    } finally {
+      this.#inFlight.delete(controller);
     }
   }
 
   /**
-   * Throws unless the host policy (if any) admits `url`. Returns the URL
-   * to request. With a policy, this is the parsed absolute URL. Thus the
-   * request goes to the same location that the check examined. A `<base>`
-   * element or a proxy cannot resolve it differently. Without a policy,
-   * it is `url`, unchanged. The error message names only the hostname or
-   * scheme that the guest supplied. It never names data that the host
-   * holds. The proxy token is not read before this check.
+   * Reads the body as UTF-8 text and counts the bytes. If the count
+   * becomes larger than `maxResponseBytes`, or if `signal` aborts, it
+   * cancels the stream and throws.
    */
-  private checkHost(url: string): string {
-    if (this.#allow === null && this.#deny === null) return url;
+  private async readBody(response: Response, signal: AbortSignal): Promise<string> {
+    const limit = this.#maxResponseBytes;
+    const tooLarge = () =>
+      new Error(`response body is larger than maxResponseBytes (${limit} bytes).`);
+    const declared = Number(response.headers.get('content-length'));
+    if (declared > limit) {
+      void response.body?.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    if (!response.body) {
+      const buf = await response.arrayBuffer();
+      if (buf.byteLength > limit) throw tooLarge();
+      return new TextDecoder().decode(buf);
+    }
 
+    const reader = response.body.getReader();
+    // A body can ignore the signal of the request (for example, a stream
+    // that the host made). Thus an abort also cancels the reader.
+    const onAbort = () => void reader.cancel().catch(() => {});
+    signal.addEventListener('abort', onAbort);
+    const decoder = new TextDecoder();
+    let total = 0;
+    let text = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (signal.aborted) throw new Error('the request was aborted.');
+        if (done) break;
+        total += value.byteLength;
+        if (total > limit) {
+          void reader.cancel().catch(() => {});
+          throw tooLarge();
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      return text + decoder.decode();
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /**
+   * Resolves `url` and throws unless the host policy (if any) admits it.
+   * Returns the parsed absolute URL. The routing decision and the request
+   * both use it, so the request goes to the location that the check
+   * examined. The error message names only the hostname or scheme that
+   * the guest supplied. It never names data that the host holds. The
+   * proxy token is not read before this check.
+   */
+  private checkHost(url: string): URL {
     let parsed: URL;
     try {
-      parsed = new URL(url, globalThis.location?.href);
+      parsed = new URL(url, pageBaseUrl());
     } catch {
-      throw new Error('URL is not allowed: it is not a valid absolute or page-relative URL.');
+      throw new Error(
+        this.#allow === null && this.#deny === null
+          ? 'URL is not a valid absolute or page-relative URL.'
+          : 'URL is not allowed: it is not a valid absolute or page-relative URL.',
+      );
     }
+    if (this.#allow === null && this.#deny === null) return parsed;
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new Error(`URL scheme "${parsed.protocol}" is not allowed: only http and https.`);
     }
@@ -184,27 +277,24 @@ export class FetchCapability implements SandboxCapability {
     if (denied || !allowed) {
       throw new Error(`Host "${host}" is not allowed.`);
     }
-    return parsed.href;
+    return parsed;
   }
 
-  private async doFetch(url: string, options: RequestInit): Promise<Response> {
+  private async doFetch(target: URL, init: RequestInit, signal: AbortSignal): Promise<Response> {
     const base = this.proxyAuth.proxyBase();
+    const url = target.href;
+    const options: RequestInit = { ...init, signal };
 
     // Case 1: proxy disabled -> direct fetch
     if (base === null) {
       return globalThis.fetch(url, options);
     }
 
-    // Case 2: same-origin URL -> direct fetch regardless of base.
-    // This is the Flow C correction of the spec: the same-origin bypass
-    // also runs when proxyBase is an absolute cross-origin URL.
-    let targetOrigin: string;
-    try {
-      targetOrigin = new URL(url, window.location.href).origin;
-    } catch {
-      targetOrigin = '';
-    }
-    if (targetOrigin === window.location.origin) {
+    // Case 2: same-origin URL -> direct fetch regardless of base. The
+    // bypass also applies when proxyBase is an absolute cross-origin URL.
+    // An opaque origin ("null") is never the same origin.
+    const pageOrigin = globalThis.location?.origin;
+    if (target.origin !== 'null' && target.origin === pageOrigin) {
       return globalThis.fetch(url, options);
     }
 
@@ -217,8 +307,15 @@ export class FetchCapability implements SandboxCapability {
       );
     }
 
-    const proxyUrl = `${base}/proxy/fetch`;
+    // Remove trailing slashes from the base. Else a base of '/' gives
+    // '//proxy/fetch', a protocol-relative URL to the host "proxy", and
+    // the token goes to that host. An empty base gives the same-origin
+    // path '/proxy/fetch'. A relative base resolves against the page
+    // location, not against a `<base>` element. Thus the token stays on
+    // the origin of the page.
+    const proxyUrl = resolveAgainstPage(`${base.replace(/\/+$/, '')}/proxy/fetch`);
     const proxyResponse = await globalThis.fetch(proxyUrl, {
+      signal,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -239,6 +336,23 @@ export class FetchCapability implements SandboxCapability {
 
     return proxyResponse;
   }
+}
+
+/**
+ * The base for a relative guest URL: `document.baseURI` when a document
+ * exists (the page `fetch` uses it too), else `location.href`. It is
+ * undefined where neither exists. Then only absolute URLs parse.
+ */
+function pageBaseUrl(): string | undefined {
+  const doc = (globalThis as { document?: { baseURI?: unknown } }).document;
+  if (doc && typeof doc.baseURI === 'string' && doc.baseURI !== '') return doc.baseURI;
+  return globalThis.location?.href;
+}
+
+/** `url` made absolute against `location.href`, or unchanged where there is no location. */
+function resolveAgainstPage(url: string): string {
+  const href = globalThis.location?.href;
+  return href === undefined ? url : new URL(url, href).href;
 }
 
 function stripTrailingDot(host: string): string {

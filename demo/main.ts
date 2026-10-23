@@ -11,13 +11,15 @@ import {
   StorageCapability,
   TimerCapability,
   type OutputEntry,
+  type SandboxCapability,
 } from '../src/index.js';
 
 const EXAMPLES: Readonly<Record<string, string>> = {
   'Hello + fetch': `console.log('Hello from the sandbox');
 
-// Host calls look synchronous to the guest. hello.json is served by this
-// page, so its host must be on the allowlist.
+// Host calls look synchronous to the guest. hello.json is a file of this
+// demo. The demo lets the guest fetch its own files, and no other path
+// on this host.
 const res = fetch('hello.json');
 console.log('status', res.status);
 const data = res.json();
@@ -72,6 +74,39 @@ function allowHosts(): string[] {
   return allowHostsInput.value.split(/[\s,]+/).filter((h) => h !== '');
 }
 
+/** The directory of this page. Same-origin guest fetches must stay in it. */
+const demoDir = new URL('./', location.href);
+
+/**
+ * Lets the guest fetch the files of the demo (for example, hello.json),
+ * but no other path on the host of the page. The demo does not put the
+ * hostname of the page on the allowlist. On GitHub Pages, all the Pages
+ * sites of an account share that hostname (`<user>.github.io`).
+ * Same-origin fetches also send the cookies of the page.
+ */
+function withDemoFiles(fetchCap: FetchCapability): SandboxCapability {
+  return {
+    name: fetchCap.name,
+    description: fetchCap.description,
+    stubInfo: fetchCap.stubInfo,
+    setupScript: fetchCap.setupScript,
+    async invokeHost(method, args) {
+      let url: URL | null = null;
+      try {
+        url = new URL(String(args[0]), location.href);
+      } catch {
+        // Not a URL: FetchCapability refuses it.
+      }
+      if (url?.origin === location.origin && !url.pathname.startsWith(demoDir.pathname)) {
+        throw new Error(`fetch failed: only the files of the demo (${demoDir.pathname}) are allowed on this host.`);
+      }
+      return fetchCap.invokeHost(method, args);
+    },
+    // Stop and the time limit abort the requests in flight.
+    cleanup: () => fetchCap.cleanup(),
+  };
+}
+
 /**
  * Applies the toggles and the allowlist. A second registration of a
  * capability replaces it, and the new one is disabled. Thus the fetch
@@ -81,7 +116,10 @@ function allowHosts(): string[] {
 function applySettings(): string | null {
   let error: string | null = null;
   try {
-    rt.registry.register(new FetchCapability(rt.auth, { allowHosts: allowHosts() }));
+    const fetchCap = new FetchCapability(rt.auth, {
+      allowHosts: [...allowHosts(), location.hostname],
+    });
+    rt.registry.register(withDemoFiles(fetchCap));
   } catch (e) {
     error = `Fetch allowlist: ${(e as Error).message}`;
   }
@@ -91,7 +129,11 @@ function applySettings(): string | null {
   return error;
 }
 
+/** The contents of the output entries of the current run. */
+const shownContents = new Set<string>();
+
 function append(entry: Pick<OutputEntry, 'type' | 'content'>): void {
+  shownContents.add(entry.content);
   const item = document.createElement('li');
   item.className = entry.type;
   item.textContent = entry.content; // guest-controlled: text only
@@ -113,13 +155,13 @@ let stopRequested = false;
 async function run(): Promise<void> {
   stopRequested = false;
   outputList.replaceChildren();
+  shownContents.clear();
   const settingsError = applySettings();
   if (settingsError) append({ type: 'warn', content: `${settingsError} (fetch disabled for this run)` });
   setStatus('Running...');
   const result = await rt.facade.execute(codeInput.value);
   // The error usually arrived as an output entry already.
-  const shown = [...outputList.children].some((li) => li.textContent?.includes(result.error ?? ''));
-  if (result.error && !shown) append({ type: 'error', content: result.error });
+  if (result.error && !shownContents.has(result.error)) append({ type: 'error', content: result.error });
   const outcome = stopRequested ? 'stopped' : result.timedOut ? 'timed out' : result.success ? 'done' : 'failed';
   setStatus(`${outcome} in ${Math.round(result.durationMs)} ms`);
 }
@@ -136,7 +178,8 @@ for (const [label, code] of Object.entries(EXAMPLES)) {
 }
 
 codeInput.value = EXAMPLES['Hello + fetch'] ?? '';
-allowHostsInput.value = ['example.com', location.hostname].join(', ');
+allowHostsInput.value = 'example.com';
+el('demo-dir').textContent = demoDir.pathname;
 runButton.addEventListener('click', () => void run());
 stopButton.addEventListener('click', () => {
   stopRequested = true;

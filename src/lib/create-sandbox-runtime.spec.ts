@@ -162,6 +162,16 @@ describe('createSandboxRuntime', () => {
     expect(jsWorkerFactory).not.toHaveBeenCalled();
   });
 
+  it('throws a RangeError for a timeoutMs or jsBootTimeoutMs that is not a usable time limit', () => {
+    for (const bad of [Infinity, NaN, 0, -5, 2 ** 31]) {
+      expect(() => createSandboxRuntime({ jsWorkerFactory, timeoutMs: bad })).toThrow(RangeError);
+      expect(() => createSandboxRuntime({ jsWorkerFactory, jsBootTimeoutMs: bad })).toThrow(
+        RangeError,
+      );
+    }
+    expect(jsWorkerFactory).not.toHaveBeenCalled();
+  });
+
   it('timeouts are plain options/properties', () => {
     const rt = build();
     expect(rt.js.timeoutMs).toBe(1234);

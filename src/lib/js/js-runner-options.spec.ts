@@ -59,13 +59,17 @@ class FakeJsWorker {
   }
 
   /** Ends run `runId` the way the worker does. */
-  done(runId: number, extra: { success?: boolean; error?: string; timedOut?: boolean } = {}): void {
+  done(
+    runId: number,
+    extra: { success?: boolean; error?: string; timedOut?: boolean; exhausted?: boolean } = {},
+  ): void {
     this.simulate({
       type: 'done',
       runId,
       success: extra.success ?? true,
       timedOut: extra.timedOut ?? false,
       ...(extra.error !== undefined ? { error: extra.error } : {}),
+      ...(extra.exhausted !== undefined ? { exhausted: extra.exhausted } : {}),
     });
   }
 }
@@ -537,6 +541,72 @@ describe('JsRunner run lifecycle', () => {
     });
   });
 
+  describe('time limit validation', () => {
+    const BAD = [Infinity, -Infinity, NaN, 0, -1, 2_147_481_648, 2 ** 31, '5' as unknown as number];
+    const BAD_BOOT = [Infinity, -Infinity, NaN, 0, -1, 2 ** 31, '5' as unknown as number];
+    const factory = () => new FakeJsWorker() as unknown as Worker;
+
+    it.each(BAD)('the constructor rejects timeoutMs %s', (timeoutMs) => {
+      expect(() => new JsRunner(registry, { workerFactory: factory, timeoutMs })).toThrow(RangeError);
+    });
+
+    it.each(BAD_BOOT)('the constructor rejects bootTimeoutMs %s', (bootTimeoutMs) => {
+      expect(() => new JsRunner(registry, { workerFactory: factory, bootTimeoutMs })).toThrow(
+        RangeError,
+      );
+    });
+
+    it('accepts the largest values that fit in a timer delay', () => {
+      const r = new JsRunner(registry, {
+        workerFactory: factory,
+        timeoutMs: 2_147_481_647,
+        bootTimeoutMs: 2_147_483_647,
+      });
+      expect(r.timeoutMs).toBe(2_147_481_647);
+      r.dispose();
+    });
+
+    it.each(BAD)('the timeoutMs setter rejects %s and keeps the old value', async (value) => {
+      await build({ timeoutMs: 1234 });
+      expect(() => {
+        runner.timeoutMs = value;
+      }).toThrow(RangeError);
+      expect(runner.timeoutMs).toBe(1234);
+      runner.timeoutMs = 50;
+      expect(runner.timeoutMs).toBe(50);
+    });
+
+    it.each(BAD)(
+      'execute({ timeoutMs: %s }) settles as a failure, posts nothing and leaves the run in flight alone',
+      async (timeoutMs) => {
+        await build();
+        const first = runner.execute('first()');
+        await settle();
+        const result = await runner.execute('bad()', { timeoutMs });
+        expect(result.success).toBe(false);
+        expect(result.timedOut).toBe(false);
+        expect(result.error).toMatch(/^timeoutMs must be a finite number greater than 0/);
+        expect(result.output).toEqual([
+          expect.objectContaining({ type: 'system', content: result.error }),
+        ]);
+        expect(workers).toHaveLength(1);
+        expect(current().runs.map((r) => r.code)).toEqual(['first()']);
+        expect(runner.isRunning.get()).toBe(true);
+        current().done(current().runs[0].runId);
+        expect((await first).success).toBe(true);
+      },
+    );
+
+    it('an invalid per-run timeoutMs never arms a backstop that fires at once', async () => {
+      await build();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const p = runner.execute('x()', { timeoutMs: Infinity });
+      vi.advanceTimersByTime(1);
+      expect((await p).timedOut).toBe(false);
+      expect(workers[0].terminate).not.toHaveBeenCalled();
+    });
+  });
+
   describe("concurrency: 'queue'", () => {
     it('runs each execute() after the previous one settles, in call order', async () => {
       await build({ concurrency: 'queue' });
@@ -838,7 +908,7 @@ describe('JsRunner run lifecycle', () => {
       runner.onRun((e) => events.push(e));
       const p = runner.execute('big()', { tag: 't', timeoutMs: 99 });
       await settle();
-      workers[0].done(workers[0].runs[0].runId, { success: false, error: OOM });
+      workers[0].done(workers[0].runs[0].runId, { success: false, error: OOM, exhausted: true });
       await settle();
 
       expect(reasons).toEqual([OOM]);
@@ -858,11 +928,12 @@ describe('JsRunner run lifecycle', () => {
       runner.onRecycle((r) => reasons.push(r));
       const p = runner.execute('big()');
       await settle();
-      workers[0].done(workers[0].runs[0].runId, { success: false, error: OOM });
+      workers[0].done(workers[0].runs[0].runId, { success: false, error: OOM, exhausted: true });
       await settle();
       workers[1].done(workers[1].runs[0].runId, {
         success: false,
         error: "capability 'd3' setup failed: {}",
+        exhausted: true,
       });
       const result = await p;
       expect(result.success).toBe(false);
@@ -891,13 +962,50 @@ describe('JsRunner run lifecycle', () => {
       expect(workers).toHaveLength(1);
     });
 
+    it.each([
+      OOM,
+      'Error: out of memory',
+      "capability 'd3' setup failed: {}",
+      'InternalError: stack overflow',
+    ])('does not retry an error with the text %j when the worker does not set exhausted', async (error) => {
+      await build();
+      const reasons: string[] = [];
+      runner.onRecycle((r) => reasons.push(r));
+      const p = runner.execute('throwIt()');
+      await settle();
+      current().done(current().runs[0].runId, { success: false, error });
+      const result = await p;
+      expect(result.error).toBe(error);
+      expect(reasons).toEqual([]);
+      expect(workers).toHaveLength(1);
+      expect(workers[0].runs).toHaveLength(1);
+    });
+
+    it('ignores exhausted on a successful or timed-out run', async () => {
+      await build();
+      const p1 = runner.execute('ok()');
+      await settle();
+      current().done(current().runs[0].runId, { exhausted: true });
+      expect((await p1).success).toBe(true);
+      const p2 = runner.execute('loop()');
+      await settle();
+      current().done(current().runs[1].runId, {
+        success: false,
+        timedOut: true,
+        error: 'Execution timed out: script exceeded the time limit.',
+        exhausted: true,
+      });
+      expect((await p2).timedOut).toBe(true);
+      expect(workers).toHaveLength(1);
+    });
+
     it('can be disabled with recoverExhaustion: false', async () => {
       await build({ recoverExhaustion: false });
       const reasons: string[] = [];
       runner.onRecycle((r) => reasons.push(r));
       const p = runner.execute('big()');
       await settle();
-      current().done(current().runs[0].runId, { success: false, error: OOM });
+      current().done(current().runs[0].runId, { success: false, error: OOM, exhausted: true });
       const result: ExecutionResult = await p;
       expect(result.error).toBe(OOM);
       expect(reasons).toEqual([]);

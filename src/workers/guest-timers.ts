@@ -3,12 +3,21 @@ import type {
   QuickJSAsyncRuntime,
   QuickJSHandle,
 } from 'quickjs-emscripten-core';
-import { serialize, type OutputEntry } from '../index.js';
+import { serialize } from '../lib/shared/serialize.js';
+import type { OutputEntry } from '../lib/shared/sandbox-types.js';
+import { callFunctionAsync, executePendingJobsAsync, SuspendGate } from './engine-async.js';
 
 export interface DrainResult {
   timedOut: boolean;
   hadError?: boolean;
 }
+
+/**
+ * The maximum number of promise jobs in one engine call. Between two
+ * batches, the loop examines the deadline. Thus a promise chain that
+ * never ends cannot keep the loop busy after the time limit.
+ */
+const JOB_BATCH = 1000;
 
 interface TimerEntry {
   id: number;
@@ -20,11 +29,19 @@ interface TimerEntry {
 
 /**
  * Guest `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
- * and the virtual-time event loop that runs them after the script's
- * top-level eval. Worker-internal. The public `TimerCapability` only
- * registers and toggles the globals. When it is enabled for a run, the
- * host installs one of these into the run's VM. After the run, the host
- * cleans it up.
+ * and the event loop that runs promise jobs and timers after the
+ * top-level eval of the script. Worker-internal. The public
+ * `TimerCapability` only registers and toggles the globals.
+ *
+ * The host uses one of these objects for each run. It calls `install()`
+ * only when the `timer` capability is enabled. It always calls
+ * `drainEventLoop()`, because promise jobs must run also without timers.
+ * After the run, the host cleans it up.
+ *
+ * The timers use virtual time. The clock starts at 0 when the run starts.
+ * It moves only forward, to the due time of the next timer. Thus a timer
+ * fires after all timers with an earlier due time, but no real time
+ * passes.
  */
 export class GuestTimers {
   private timers = new Map<number, TimerEntry>();
@@ -112,16 +129,28 @@ export class GuestTimers {
     return false;
   }
 
+  /**
+   * Runs the promise jobs and the due timers until none remain. Stops when
+   * the deadline passes or `interrupted()` is true. `interrupted()` tells
+   * if the interrupt handler of the engine stopped guest code. Then an
+   * engine error is a timeout, not a guest error.
+   *
+   * The jobs and the timer callbacks run through async engine calls
+   * (engine-async.ts). Thus a host call in them can suspend the engine.
+   * `gate` tells the host functions when they can suspend.
+   */
   async drainEventLoop(
     runtime: QuickJSAsyncRuntime,
     vm: QuickJSAsyncContext,
     emit: (entry: OutputEntry) => void,
     deadlineMs: number,
+    interrupted: () => boolean = () => false,
+    gate: SuspendGate = new SuspendGate(),
   ): Promise<DrainResult> {
-    this.virtualNow = Date.now();
     let hadError = false;
-    let callbacksSinceYield = 0;
+    let stepsSinceYield = 0;
     let lastYieldWall = Date.now();
+    const outOfTime = (): boolean => interrupted() || Date.now() >= deadlineMs;
 
     const dumpError = (handle: QuickJSHandle): void => {
       const errObj = vm.dump(handle);
@@ -142,31 +171,51 @@ export class GuestTimers {
       emit({ type: 'error', content, timestamp: Date.now() });
     };
 
-    const flushMicrotasks = (): boolean => {
-      // Returns true if an error occurred (the caller must stop).
-      const jobResult = runtime.executePendingJobs();
-      const errHandle = jobResult.error;
-      if (errHandle) {
-        dumpError(errHandle);
-        errHandle.dispose();
-        jobResult.dispose();
-        hadError = true;
-        return true;
+    /** Lets the host event loop run from time to time. Returns true when the time is out. */
+    const maybeYield = async (): Promise<boolean> => {
+      stepsSinceYield++;
+      if (stepsSinceYield >= 100 || Date.now() - lastYieldWall >= 50) {
+        await new Promise((r) => setTimeout(r, 0));
+        stepsSinceYield = 0;
+        lastYieldWall = Date.now();
       }
-      jobResult.dispose();
-      return false;
+      return outOfTime();
+    };
+
+    /** Runs all pending promise jobs, in batches. */
+    const flushMicrotasks = async (): Promise<'ok' | 'error' | 'timeout'> => {
+      while (runtime.hasPendingJob()) {
+        if (outOfTime()) return 'timeout';
+        const jobResult = await gate.suspendable(() =>
+          executePendingJobsAsync(runtime, JOB_BATCH),
+        );
+        const errHandle = jobResult.error;
+        if (errHandle) {
+          // When the time is out, the interrupt handler stopped the job.
+          if (outOfTime()) {
+            errHandle.dispose();
+            return 'timeout';
+          }
+          dumpError(errHandle);
+          errHandle.dispose();
+          hadError = true;
+          return 'error';
+        }
+        if (await maybeYield()) return 'timeout';
+      }
+      return 'ok';
     };
 
     while (true) {
       // 1. Wall-clock deadline check
-      if (Date.now() >= deadlineMs) {
+      if (outOfTime()) {
         return { timedOut: true, hadError };
       }
 
       // 2. Flush microtasks
-      if (flushMicrotasks()) {
-        return { timedOut: false, hadError };
-      }
+      const flushed = await flushMicrotasks();
+      if (flushed === 'timeout') return { timedOut: true, hadError };
+      if (flushed === 'error') return { timedOut: false, hadError };
 
       // 3. Collect due timers
       const due: TimerEntry[] = [];
@@ -179,19 +228,15 @@ export class GuestTimers {
 
       // 4. If no timers are due, advance the virtual clock or exit
       if (due.length === 0) {
-        // Find next due time among non-cleared entries
+        // Find the next due time among the entries that are not cleared
         let next: number | null = null;
         for (const e of this.timers.values()) {
           if (e.cleared) continue;
           if (next === null || e.dueTime < next) next = e.dueTime;
         }
         if (next === null) {
-          // No timers remain. Check pending jobs one more time, then exit
-          if (!runtime.hasPendingJob()) {
-            return { timedOut: false, hadError };
-          }
-          // Pending jobs exist but no timers. The loop flushes them on the next iteration
-          continue;
+          // No timers remain, and step 2 ran all promise jobs
+          return { timedOut: false, hadError };
         }
         if (next > this.virtualNow) {
           this.virtualNow = next;
@@ -199,20 +244,26 @@ export class GuestTimers {
         continue;
       }
 
-      // 5. Fire due callbacks
+      // 5. Fire due callbacks. Each callback is a macrotask. Thus the loop
+      // runs the promise jobs of a callback before the next callback.
       for (const entry of due) {
         // Check cleared again, because a previous callback can cancel it
         if (entry.cleared) continue;
 
-        const callResult = vm.callFunction(entry.callback, vm.undefined);
+        const callResult = await gate.suspendable(() =>
+          callFunctionAsync(vm, entry.callback, vm.undefined),
+        );
         const callErr = callResult.error;
         if (callErr) {
+          if (outOfTime()) {
+            if (callErr.alive) callErr.dispose();
+            return { timedOut: true, hadError };
+          }
           dumpError(callErr);
           if (callErr.alive) callErr.dispose();
           hadError = true;
         } else {
-          const callVal = callResult.value as QuickJSHandle;
-          if (callVal && callVal.alive) callVal.dispose();
+          if (callResult.value.alive) callResult.value.dispose();
         }
 
         if (entry.interval === null) {
@@ -224,23 +275,13 @@ export class GuestTimers {
           entry.dueTime += entry.interval;
         }
 
-        callbacksSinceYield++;
+        const afterCallback = await flushMicrotasks();
+        if (afterCallback === 'timeout') return { timedOut: true, hadError };
+        if (afterCallback === 'error') return { timedOut: false, hadError };
 
-        // Periodic yield to host event loop
-        const wallNow = Date.now();
-        if (callbacksSinceYield >= 100 || wallNow - lastYieldWall >= 50) {
-          await new Promise((r) => setTimeout(r, 0));
-          callbacksSinceYield = 0;
-          lastYieldWall = Date.now();
-          if (Date.now() >= deadlineMs) {
-            return { timedOut: true, hadError };
-          }
+        if (await maybeYield()) {
+          return { timedOut: true, hadError };
         }
-      }
-
-      // 6. Flush microtasks created by callbacks
-      if (flushMicrotasks()) {
-        return { timedOut: false, hadError };
       }
     }
   }

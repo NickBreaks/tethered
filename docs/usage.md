@@ -65,7 +65,20 @@ rt.dispose();        // terminates the worker, removes subscribers
 Guest code is a script, not a module. Thus, you cannot use `import` or a
 top-level `await`. To the guest, host calls through capabilities (for
 example, `fetch`) look synchronous. The worker suspends the engine until
-the host answers.
+the host answers. This is also true in a promise job (for example, after
+`await` or in `.then()`) and in a timer callback.
+
+A host call cannot suspend the engine inside a function that the host
+calls synchronously. An example is `toJSON()` while `console.log` reads
+its argument. There, the host call throws an error in the guest. After
+the time limit, a host call does not start, and the run times out.
+
+After the script, the worker runs all promise jobs, also when the `timer`
+capability is disabled. If the value of the script is a promise, the
+result is the value of that promise when it settles. Thus, an async IIFE
+such as `(async () => { … })()` gives its return value. If the promise
+rejects, the run fails with that error. A promise that can never settle
+gives no result entry.
 
 `OutputEntry.type` is `'log'`, `'warn'`, `'error'`, `'result'` or
 `'system'`. The guest controls the string in each `content`. Render it as
@@ -101,14 +114,21 @@ rt.registry.setEnabled('fetch', true);
 
 - **fetch**: `allowHosts` / `denyHosts` limit the destinations. First,
   read the fetch section of the [threat model](threat-model.md).
+  `maxResponseBytes` limits the size of a response body (default 10 MiB).
+  The guest can use the response directly (`fetch(u).json()`), with
+  `await`, or with `.then()`.
   Cross-origin requests can go through a CORS proxy (`corsProxyUrl`).
   Refer to the [proxy protocol](proxy-protocol.md).
 - **storage**: the `localStorage` of the page, under a fixed key prefix.
   To change this, give your own backend (`getItem`/`setItem`/`removeItem`).
 - **disk**: by default, a virtual file system in IndexedDB. You can give a
-  `MapDiskBackend` or your own `DiskBackend`.
+  `MapDiskBackend` or your own `DiskBackend`. Paths are absolute keys.
+  The capability resolves `.` and `..` (`normalizePath`), and `..` never
+  goes above `/`.
 - **timer**: guest timers run on virtual time inside the worker. The
-  worker drains them before the run settles.
+  clock starts at 0 for each run, and moves forward to the next due
+  timer. No real time passes. The worker drains the timers before the
+  run settles.
 
 Your own capability implements `SandboxCapability`:
 

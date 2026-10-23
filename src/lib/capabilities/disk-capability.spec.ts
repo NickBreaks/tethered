@@ -5,7 +5,7 @@ import {
   type QuickJSAsyncContext,
 } from 'quickjs-emscripten-core';
 import variant from '@jitl/quickjs-singlefile-browser-release-asyncify';
-import { DiskCapability, MapDiskBackend } from './disk-capability.js';
+import { DiskCapability, MapDiskBackend, normalizePath } from './disk-capability.js';
 import { injectCapabilityBridge } from '../../workers/capability-bridge.js';
 import type { SandboxCapability } from './capability.js';
 
@@ -166,5 +166,44 @@ describe('DiskCapability', () => {
   it('MapDiskBackend.delete on non-existent path is a no-op (no throw)', async () => {
     const map = new MapDiskBackend();
     await expect(map.delete('/nope.txt')).resolves.toBeUndefined();
+  });
+
+  it('normalizePath resolves . and .. segments and never goes above the root', () => {
+    expect(normalizePath('/a/../b')).toBe('/b');
+    expect(normalizePath('/a/./b/')).toBe('/a/b');
+    expect(normalizePath('a//b/../c')).toBe('/a/c');
+    expect(normalizePath('/../x')).toBe('/x');
+    expect(normalizePath('../../x/..')).toBe('/');
+    expect(normalizePath('/a/b/../../..')).toBe('/');
+    expect(normalizePath('')).toBe('/');
+    expect(normalizePath('.')).toBe('/');
+    // Only exact '.' and '..' segments are special.
+    expect(normalizePath('/a/.../..b/.c')).toBe('/a/.../..b/.c');
+  });
+
+  it('a path with .. reads and writes the same file as its resolved form', async () => {
+    const cap = new DiskCapability(backend);
+    injectCap(vm, cap);
+    const val = await evalAndDump(`
+      disk.writeFile('/a/../b.txt', 'one');
+      disk.writeFile('/../../c.txt', 'two');
+      [disk.readFile('/b.txt'), disk.readFile('./c.txt')];
+    `);
+    expect(val).toEqual(['one', 'two']);
+    expect((await backend.list()).sort()).toEqual(['/b.txt', '/c.txt']);
+  });
+
+  it('listFiles resolves . and .. in the directory path', async () => {
+    const cap = new DiskCapability(backend);
+    injectCap(vm, cap);
+    const val = await evalAndDump(`
+      disk.writeFile('/top.txt', 'x');
+      disk.writeFile('/data/hello.txt', 'Hello');
+      disk.writeFile('/data/sub/nested.txt', 'Nested');
+      [disk.listFiles('/data/sub/..'), disk.listFiles('/data/./sub/'), disk.listFiles('/..')];
+    `) as string[][];
+    expect([...val[0]!].sort()).toEqual(['hello.txt', 'sub/']);
+    expect(val[1]).toEqual(['nested.txt']);
+    expect([...val[2]!].sort()).toEqual(['data/', 'top.txt']);
   });
 }, 30_000);

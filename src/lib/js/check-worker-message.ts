@@ -109,12 +109,13 @@ export function checkWorkerMessage(data: unknown): CheckedWorkerMsg {
       case 'cap-call':
         return checkCapCall(data);
       case 'done': {
-        const { runId, success, timedOut, error } = data;
+        const { runId, success, timedOut, error, exhausted } = data;
         if (
           !isId(runId) ||
           typeof success !== 'boolean' ||
           typeof timedOut !== 'boolean' ||
-          (error !== undefined && typeof error !== 'string')
+          (error !== undefined && typeof error !== 'string') ||
+          (exhausted !== undefined && typeof exhausted !== 'boolean')
         ) {
           return reject('malformed done');
         }
@@ -126,6 +127,7 @@ export function checkWorkerMessage(data: unknown): CheckedWorkerMsg {
             success,
             timedOut,
             ...(error !== undefined ? { error } : {}),
+            ...(exhausted !== undefined ? { exhausted } : {}),
           },
         };
       }
