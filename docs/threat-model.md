@@ -106,8 +106,8 @@ never copies them into the worker or into an error message.
 ## Built-in capabilities: attack surface
 
 All four are off until the host registers and enables them. Arguments
-arrive as plain copies of values. Where capabilities expect strings, they
-convert the arguments with `String()`.
+arrive as plain copies of values. Paths, keys and URLs go through
+`String()`. `storage.setItem` refuses a value that is not a string.
 
 ### fetch (`FetchCapability`)
 
@@ -230,7 +230,7 @@ are records in the `__sandbox_disk__` IndexedDB database.
 - Paths are normalized strings that the store uses as record keys. There
   is no real file system behind them. Thus, `..` and similar paths cannot
   go out of the store.
-- `normalizePath` resolves `.` and `..` segments as POSIX does. A `..` at
+- The capability resolves `.` and `..` segments as POSIX does. A `..` at
   the root stays at the root (`/../x` is `/x`). Thus, `/a/../b` and `/b`
   are the same file.
 - The guest can read, overwrite and list all files in the store. This

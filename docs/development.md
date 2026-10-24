@@ -30,9 +30,6 @@ CI uses the same procedure.
 - Specs are adjacent to the code (`*.spec.ts`). The names of browser-only
   specs end in `.integration.spec.ts`. Use this name for a spec that must
   have a real `Worker` or a real IndexedDB. Do not skip a spec.
-- Some spec names start with an id, for example `A32:`. This id refers to
-  a behaviour that the author specified and verified with the code. When
-  you change such a spec, keep the id.
 - For each new behaviour, add a spec that fails without that behaviour.
 
 ## Writing style

@@ -15,7 +15,7 @@ export interface CapabilityInfo {
 
 /**
  * Tracks the registered capabilities and which of them are enabled.
- * Both runners read the enabled set at the start of every run.
+ * The JS runner reads the enabled set at the start of every run.
  */
 export class CapabilityStore {
   readonly #entries = createValue<Map<string, RegistryEntry>>(new Map());

@@ -64,5 +64,7 @@ declaration file names the engine.
 - The core (`src/index.ts`, `src/lib/`) imports no package and no worker
   module. ESLint, `src/lib/core-import-guard.spec.ts` and
   `scripts/verify-build.mjs` enforce this rule.
-- `src/workers/` imports the core only through `src/index.ts`.
+- `src/workers/` does not import `src/index.ts`. It imports only the
+  shared types, the worker protocol and the capability contract from
+  `src/lib/`. ESLint enforces this rule.
 - No emitted `.d.ts` mentions the engine.

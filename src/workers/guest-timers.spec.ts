@@ -7,8 +7,9 @@ import {
 import variant from '@jitl/quickjs-singlefile-browser-release-asyncify';
 import type { OutputEntry } from '../lib/shared/sandbox-types.js';
 import { GuestTimers } from './guest-timers.js';
+import { SuspendGate } from './engine-async.js';
 
-// Engine-side timer globals, moved from the core TimerCapability (A23):
+// Engine-side timer globals, moved from the core TimerCapability:
 // the capability is now a descriptor and the worker owns this implementation.
 describe('GuestTimers', () => {
   let module: QuickJSAsyncWASMModule;
@@ -57,7 +58,7 @@ describe('GuestTimers', () => {
     }
   }
 
-  it('A23: drainEventLoop runs the promise jobs and fires the timers in due-time order', async () => {
+  it('drainEventLoop runs the promise jobs and fires the timers in due-time order', async () => {
     await evalAndDump(`
       globalThis.order = [];
       setTimeout(() => order.push('t30'), 30);
@@ -72,12 +73,18 @@ describe('GuestTimers', () => {
       0;
     `);
     const emitted: OutputEntry[] = [];
-    const drained = await timers.drainEventLoop(runtime, vm, (e) => emitted.push(e), Date.now() + 5000);
+    const drained = await timers.drainEventLoop(
+      runtime,
+      vm,
+      (e) => emitted.push(e),
+      Date.now() + 5000,
+      () => false,
+      new SuspendGate(),
+    );
     expect(drained).toEqual({ timedOut: false, hadError: false });
     expect(emitted).toEqual([]);
     // Virtual time: the interval fires at 8, 16 and 24.
     expect(await evalAndDump('order')).toEqual(['job', 'i1', 't10', 'i2', 'i3', 't30']);
-    expect(timers.hasPendingTimers()).toBe(false);
   });
 
   it('should register all four timer globals as functions in the VM', async () => {
@@ -112,7 +119,6 @@ describe('GuestTimers', () => {
         isTypeError: true,
         message: `${fnName}: callback must be a function`,
       });
-      expect(timers.hasPendingTimers()).toBe(false);
     });
   });
 
@@ -133,27 +139,9 @@ describe('GuestTimers', () => {
   ])('should dispose all callback handles when cleanup runs with %s', async (_, code) => {
     const before = liveObjects();
     await evalAndDump(code);
-    expect(timers.hasPendingTimers()).toBe(true);
     // Each of the three callbacks stays alive, also the cleared one.
     expect(liveObjects()).toBe(before + 3);
     timers.cleanup();
-    expect(timers.hasPendingTimers()).toBe(false);
     expect(liveObjects()).toBe(before);
-  });
-
-  it('hasPendingTimers should reflect registry state across operations', async () => {
-    expect(timers.hasPendingTimers()).toBe(false);
-
-    await evalAndDump(`globalThis.__id = setTimeout(() => {}, 100)`);
-    expect(timers.hasPendingTimers()).toBe(true);
-
-    await evalAndDump(`clearTimeout(globalThis.__id)`);
-    expect(timers.hasPendingTimers()).toBe(false);
-
-    await evalAndDump(`setTimeout(() => {}, 100)`);
-    expect(timers.hasPendingTimers()).toBe(true);
-
-    timers.cleanup();
-    expect(timers.hasPendingTimers()).toBe(false);
   });
 }, 30_000);

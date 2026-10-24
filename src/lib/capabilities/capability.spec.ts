@@ -15,7 +15,7 @@ const stubProxyAuth = {
 
 describe('SandboxCapability', () => {
   // `npm run typecheck` enforces this test. Vitest does not.
-  it('A22: has no inject member', () => {
+  it('has no inject member', () => {
     expectTypeOf<SandboxCapability>().not.toHaveProperty('inject');
   });
 
@@ -24,7 +24,7 @@ describe('SandboxCapability', () => {
     ['DiskCapability', () => new DiskCapability(new MapDiskBackend())],
     ['FetchCapability', () => new FetchCapability(stubProxyAuth)],
     ['TimerCapability', () => new TimerCapability()],
-  ])('A22: no built-in capability carries an inject method (%s)', (_name, make) => {
+  ])('no built-in capability carries an inject method (%s)', (_name, make) => {
     const cap = make();
     expect('inject' in cap, cap.name).toBe(false);
   });

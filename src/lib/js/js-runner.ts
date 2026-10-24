@@ -12,10 +12,9 @@ import {
 } from './worker-protocol.js';
 import { checkWorkerMessage } from './check-worker-message.js';
 
-export type { OutputEntry, ExecutionResult } from '../shared/sandbox-types.js';
-
 const ABORT_MSG = 'Execution aborted.';
 const SUPERSEDED_MSG = 'Execution superseded by a newer run.';
+const NOT_READY_MSG = 'The JS worker is not ready.';
 
 /**
  * Grace period added to timeoutMs for the main-thread backstop timer.
@@ -135,7 +134,7 @@ interface ActiveJsRun {
   output: OutputEntry[];
   startTime: number;
   resolve: (outcome: RunOutcome) => void;
-  backstopHandle: ReturnType<typeof setTimeout> | null;
+  backstopHandle: ReturnType<typeof setTimeout>;
   enabledCaps: { cleanup?(): void | Promise<void> }[];
 }
 
@@ -380,8 +379,8 @@ export class JsRunner implements CodeRunner {
       if (!this.#activeRun) this.#isRunning.set(false);
       return {
         success: false,
-        output: [{ type: 'system', content: 'WASM module not initialized', timestamp: Date.now() }],
-        error: 'WASM module not initialized',
+        output: [{ type: 'system', content: NOT_READY_MSG, timestamp: Date.now() }],
+        error: NOT_READY_MSG,
         timedOut: false,
         durationMs: 0,
       };
@@ -639,7 +638,7 @@ export class JsRunner implements CodeRunner {
   #completeRun(msg: Extract<JsWorkerToMainMsg, { type: 'done' }>): void {
     if (!this.#activeRun || this.#activeRun.runId !== msg.runId) return;
     const { output, startTime, resolve, backstopHandle, enabledCaps } = this.#activeRun;
-    if (backstopHandle !== null) clearTimeout(backstopHandle);
+    clearTimeout(backstopHandle);
     this.#activeRun = null;
     this.#isRunning.set(false);
     this.#activeTag.set(null);
@@ -662,7 +661,7 @@ export class JsRunner implements CodeRunner {
   #kill(runId: number, reason: 'abort' | 'timeout'): void {
     if (!this.#activeRun || this.#activeRun.runId !== runId) return;
     const { output, startTime, resolve, backstopHandle, enabledCaps } = this.#activeRun;
-    if (backstopHandle !== null) clearTimeout(backstopHandle);
+    clearTimeout(backstopHandle);
     this.#activeRun = null;
     this.#isRunning.set(false);
 
@@ -702,7 +701,7 @@ export class JsRunner implements CodeRunner {
   #supersede(): void {
     if (!this.#activeRun) return;
     const { output, startTime, resolve, backstopHandle, enabledCaps } = this.#activeRun;
-    if (backstopHandle !== null) clearTimeout(backstopHandle);
+    clearTimeout(backstopHandle);
     this.#activeRun = null;
 
     const entry: OutputEntry = { type: 'system', content: SUPERSEDED_MSG, timestamp: Date.now() };
@@ -769,7 +768,8 @@ export class JsRunner implements CodeRunner {
   #cleanupCaps(caps: { cleanup?(): void | Promise<void> }[]): void {
     for (const cap of [...caps].reverse()) {
       try {
-        void cap.cleanup?.();
+        // A rejected cleanup must not become an unhandled rejection.
+        void Promise.resolve(cap.cleanup?.()).catch(() => {});
       } catch {
         // Best effort.
       }

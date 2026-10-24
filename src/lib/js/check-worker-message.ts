@@ -13,7 +13,7 @@ import type { JsWorkerToMainMsg } from './worker-protocol.js';
  * The caller does the capability checks that need the state of the host
  * (is it registered, is it enabled). This function checks only the shape.
  */
-export type CheckedWorkerMsg =
+type CheckedWorkerMsg =
   | { ok: true; msg: JsWorkerToMainMsg }
   | {
       ok: false;

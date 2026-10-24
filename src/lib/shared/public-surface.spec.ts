@@ -3,11 +3,11 @@
 // compiles again. The export lists fail when an export is added or
 // removed and the lists (and the CHANGELOG) are not updated.
 
-// @ts-expect-error A4: TracebackFrame is not exported
+// @ts-expect-error TracebackFrame is not exported
 import type { TracebackFrame } from '../../index.js';
-// @ts-expect-error A4: SyntaxErrorInfo is not exported
+// @ts-expect-error SyntaxErrorInfo is not exported
 import type { SyntaxErrorInfo } from '../../index.js';
-// @ts-expect-error A3: the core declares no LanguageMode (modes are runner-map keys)
+// @ts-expect-error the core declares no LanguageMode (modes are runner-map keys)
 import type { LanguageMode } from '../../index.js';
 import * as core from '../../index.js';
 import * as workers from '../../workers/index.js';
@@ -24,16 +24,14 @@ describe('public surface', () => {
         'FetchCapability',
         'IndexedDBDiskBackend',
         'JsRunner',
+        'LocalStorageBackend',
         'MapDiskBackend',
+        'MapStorageBackend',
         'ProxyAuth',
         'RuntimeFacade',
-        'SANDBOX_DISK_DB_VERSION',
         'StorageCapability',
         'TimerCapability',
         'createSandboxRuntime',
-        'normalizePath',
-        'openSandboxDisk',
-        'serialize',
       ].sort(),
     );
   });
@@ -44,7 +42,7 @@ describe('public surface', () => {
     );
   });
 
-  it('A3: the core has no LanguageMode type; modes are runner-map keys', () => {
+  it('the core has no LanguageMode type; modes are runner-map keys', () => {
     const unused: Unused[] = [];
     expect(unused).toEqual([]);
   });
@@ -52,37 +50,37 @@ describe('public surface', () => {
   // Each `@ts-expect-error` below also passes on an unrelated type error.
   // Thus each test also has a control: the same value without the
   // forbidden part. The control must compile.
-  it("A4: OutputEntry.type excludes 'stdout' and 'stderr'", () => {
+  it("OutputEntry.type excludes 'stdout' and 'stderr'", () => {
     const log: OutputEntry = { type: 'log', content: '', timestamp: 0 };
-    // @ts-expect-error A4: no 'stdout' entries
+    // @ts-expect-error no 'stdout' entries
     const out: OutputEntry = { type: 'stdout', content: '', timestamp: 0 };
-    // @ts-expect-error A4: no 'stderr' entries
+    // @ts-expect-error no 'stderr' entries
     const err: OutputEntry = { type: 'stderr', content: '', timestamp: 0 };
     expect([log, out, err]).toHaveLength(3);
   });
 
-  it('A4: OutputEntry has no frames or syntaxError field', () => {
+  it('OutputEntry has no frames or syntaxError field', () => {
     const plain: OutputEntry = { type: 'error', content: '', timestamp: 0 };
-    // @ts-expect-error A4: no traceback frames
+    // @ts-expect-error no traceback frames
     const framed: OutputEntry = { type: 'error', content: '', timestamp: 0, frames: [] };
     const syntax: OutputEntry = {
       type: 'error',
       content: '',
       timestamp: 0,
-      // @ts-expect-error A4: no syntax-error payload
+      // @ts-expect-error no syntax-error payload
       syntaxError: { message: '', line: 1 },
     };
     expect([plain, framed, syntax]).toHaveLength(3);
   });
 
-  it('A16: the runtime has one worker factory option and no runner fields besides js', () => {
+  it('the runtime has one worker factory option and no runner fields besides js', () => {
     const factory = () => ({}) as Worker;
     const control = createSandboxRuntime({ jsWorkerFactory: factory });
     expect(control.js).toBeDefined();
     control.dispose();
     // @ts-expect-error the only worker factory option is jsWorkerFactory
     const rt = createSandboxRuntime({ jsWorkerFactory: factory, wasmWorkerFactory: factory });
-    // @ts-expect-error A16: extra runners are registered through `runners`, not as runtime fields
+    // @ts-expect-error extra runners are registered through `runners`, not as runtime fields
     expect(rt.wasm).toBeUndefined();
     rt.dispose();
   });

@@ -5,8 +5,11 @@ export interface DiskBackend {
   read(path: string): Promise<string | undefined>;
   write(path: string, content: string): Promise<void>;
   list(): Promise<string[]>;
-  /** Idempotent: a no-op when the path is absent. */
-  delete(path: string): Promise<void>;
+  /**
+   * Optional. `DiskCapability` does not call it, because the guest API has
+   * no delete. Idempotent: a no-op when the path is absent.
+   */
+  delete?(path: string): Promise<void>;
 }
 
 /**
@@ -158,7 +161,7 @@ export class DiskCapability implements SandboxCapability {
         // Find direct children of the directory
         const children = new Set<string>();
         for (const filePath of allPaths) {
-          if (!filePath.startsWith(prefix) && filePath !== dirPath) continue;
+          if (!filePath.startsWith(prefix)) continue;
           const relative = filePath.slice(prefix.length);
           if (!relative) continue;
           const slashIdx = relative.indexOf('/');

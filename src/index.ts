@@ -16,25 +16,24 @@ export type { JsRunnerOptions, RunInfo } from './lib/js/js-runner.js';
 export { CapabilityStore } from './lib/capabilities/capability-store.js';
 export type { CapabilityInfo } from './lib/capabilities/capability-store.js';
 export type { SandboxCapability, CapabilityStubInfo } from './lib/capabilities/capability.js';
-export { StorageCapability } from './lib/capabilities/storage-capability.js';
+export {
+  StorageCapability,
+  LocalStorageBackend,
+  MapStorageBackend,
+} from './lib/capabilities/storage-capability.js';
+export type { StorageBackend } from './lib/capabilities/storage-capability.js';
 export { TimerCapability } from './lib/capabilities/timer-capability.js';
 export { FetchCapability, type FetchCapabilityOptions } from './lib/capabilities/fetch-capability.js';
 export {
   DiskCapability,
   MapDiskBackend,
   IndexedDBDiskBackend,
-  normalizePath,
 } from './lib/capabilities/disk-capability.js';
 export type { DiskBackend } from './lib/capabilities/disk-capability.js';
-export {
-  openSandboxDisk,
-  SANDBOX_DISK_DB_VERSION,
-} from './lib/capabilities/sandbox-disk-db.js';
 
 export { ProxyAuth } from './lib/proxy/proxy-auth.js';
 export type { ProxyAuthLike } from './lib/proxy/proxy-auth.js';
 
-export { serialize } from './lib/shared/serialize.js';
 export type { OutputEntry, ExecutionResult } from './lib/shared/sandbox-types.js';
 export type { CodeRunner, ExecuteOptions } from './lib/shared/code-runner.js';
 export type {

@@ -119,7 +119,7 @@ function contextInternals(vm: QuickJSAsyncContext): ContextInternals {
 }
 
 /** The result of one call of `executePendingJobsAsync()`. */
-export type AsyncJobsResult =
+type AsyncJobsResult =
   | { executed: number; error?: undefined }
   | { executed?: undefined; error: QuickJSHandle };
 
@@ -165,7 +165,7 @@ export async function executePendingJobsAsync(
 }
 
 /** The result of one call of `callFunctionAsync()`. */
-export type AsyncCallResult =
+type AsyncCallResult =
   | { value: QuickJSHandle; error?: undefined }
   | { value?: undefined; error: QuickJSHandle };
 

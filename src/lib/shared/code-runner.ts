@@ -25,6 +25,10 @@ export interface CodeRunner {
   /** The `tag` of the run in flight, or `null` between runs. */
   readonly activeTag: ReadableValue<string | null>;
   initialize(): Promise<void>;
+  /**
+   * Runs `code`. The facade calls this also when `ready` is `false`. If
+   * the runner cannot run the code, it resolves with `success: false`.
+   */
   execute(code: string, options?: ExecuteOptions): Promise<ExecutionResult>;
   abort(): Promise<void>;
   /**

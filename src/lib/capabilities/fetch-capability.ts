@@ -310,7 +310,7 @@ export class FetchCapability implements SandboxCapability {
     if (authHeader === null) {
       this.proxyAuth.invalidate();
       throw new Error(
-        'Proxy fetch failed: no authentication token. Use the token modal to enter your proxy key.',
+        'Proxy fetch failed: no authentication token. Set the proxy token with ProxyAuth.setToken().',
       );
     }
 

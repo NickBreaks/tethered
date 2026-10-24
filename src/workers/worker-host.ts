@@ -35,6 +35,8 @@ interface RunOutcome {
   timedOut: boolean;
   error?: string;
   exhausted?: boolean;
+  /** The run failed before the guest code started. */
+  failedBeforeGuest?: boolean;
 }
 
 /** The state of the value of the top-level eval, after the event loop ran. */
@@ -100,13 +102,14 @@ export class JsWorkerHost {
     };
     const outcome = await this.#execute(msg, emit);
     // The text of the error can come from the guest. Thus it only selects
-    // the runs to examine. The worker reports a spent heap only when it
-    // cannot start a fresh engine. The engine of the run is gone now.
+    // the runs to examine. A failure before the guest code starts, for
+    // example a capability setup that throws, is also examined. The worker
+    // reports a spent heap only when it cannot start a fresh engine. The
+    // engine of the run is gone now.
     if (
       !outcome.success &&
       !outcome.timedOut &&
-      !outcome.exhausted &&
-      OUT_OF_MEMORY.test(outcome.error ?? '') &&
+      (outcome.failedBeforeGuest || OUT_OF_MEMORY.test(outcome.error ?? '')) &&
       !this.#engineCanStart()
     ) {
       outcome.exhausted = true;
@@ -141,9 +144,9 @@ export class JsWorkerHost {
     const loop = new GuestTimers();
     // Tells the host functions when a host call can suspend the engine.
     const gate = new SuspendGate();
-    // False until the guest code starts. Before that, only host code runs.
-    // Thus a failure in that time is not a guest error: the engine cannot
-    // start.
+    // False until the guest code starts. Before that, only host code and
+    // capability setup scripts run. Thus a failure in that time is not a
+    // guest error.
     let guestStarted = false;
     // Set only by the interrupt handler, when it stops the guest after the
     // deadline. A guest cannot set it with a thrown value.
@@ -218,7 +221,7 @@ export class JsWorkerHost {
         if (settled.kind === 'value' && settled.value !== undefined) {
           emit({ type: 'result', content: serialize(settled.value), timestamp: Date.now() });
         }
-        return { success: drained.hadError !== true, timedOut: false };
+        return { success: !drained.hadError, timedOut: false };
       } finally {
         if (valueHandle.alive) valueHandle.dispose();
       }
@@ -226,7 +229,7 @@ export class JsWorkerHost {
       if (interrupted) return this.#timedOut(emit);
       const content = e instanceof Error ? e.message : String(e);
       emit({ type: 'error', content, timestamp: Date.now() });
-      return { success: false, timedOut: false, error: content, exhausted: !guestStarted };
+      return { success: false, timedOut: false, error: content, failedBeforeGuest: !guestStarted };
     } finally {
       try {
         loop.cleanup();

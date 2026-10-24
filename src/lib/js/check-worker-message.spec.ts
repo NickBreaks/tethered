@@ -10,12 +10,12 @@ describe('checkWorkerMessage', () => {
     ['an empty array', [], 'not an object'],
     ['an array that holds a message', [{ type: 'ready' }], 'not an object'],
     ['an object without type', {}, 'unknown message type'],
-  ])('A28: rejects %s', (_name, data, reason) => {
+  ])('rejects %s', (_name, data, reason) => {
     expect(checkWorkerMessage(data)).toStrictEqual({ ok: false, reason });
   });
 
   it.each(['pwn', 'toString', '__proto__', 42, null])(
-    'A24: rejects the unknown type %j, including inherited property names',
+    'rejects the unknown type %j, including inherited property names',
     (type) => {
       expect(checkWorkerMessage({ type })).toStrictEqual({
         ok: false,
@@ -93,7 +93,7 @@ describe('checkWorkerMessage', () => {
     ['an entry with an unknown type', { type: 'shout', content: 'x', timestamp: 1 }],
     ['an entry with non-string content', { type: 'log', content: 1, timestamp: 1 }],
     ['an entry without timestamp', { type: 'log', content: 'x' }],
-  ])('A25: rejects output with %s', (_name, entry) => {
+  ])('rejects output with %s', (_name, entry) => {
     expect(checkWorkerMessage({ type: 'output', runId: 1, entry })).toStrictEqual({
       ok: false,
       reason: 'malformed output',
@@ -108,14 +108,14 @@ describe('checkWorkerMessage', () => {
     });
   });
 
-  describe('A26: a malformed cap-call carries callId and runId when both are usable', () => {
+  describe('a malformed cap-call carries callId and runId when both are usable', () => {
     const base = { type: 'cap-call', callId: 7, runId: 2, capability: 'c', method: 'm', args: [] };
 
     it.each([
       ['args is not an array', { args: 'x' }],
       ['method is not a string', { method: 1 }],
       ['capability is not a string', { capability: undefined }],
-    ])('A26: %s: the rejection carries the ids', (problem, change) => {
+    ])('%s: the rejection carries the ids', (problem, change) => {
       expect(checkWorkerMessage({ ...base, ...change })).toStrictEqual({
         ok: false,
         reason: `malformed cap-call: ${problem}`,
@@ -128,7 +128,7 @@ describe('checkWorkerMessage', () => {
       ['callId is not a number', { callId: '7', args: 'x' }],
       ['runId is not a number', { runId: null }],
       ['runId is not a number', { runId: Number.NaN, method: 1 }],
-    ])('A26: %s: the rejection has no ids (%j)', (problem, change) => {
+    ])('%s: the rejection has no ids (%j)', (problem, change) => {
       expect(checkWorkerMessage({ ...base, ...change })).toStrictEqual({
         ok: false,
         reason: `malformed cap-call: ${problem}`,
@@ -139,7 +139,7 @@ describe('checkWorkerMessage', () => {
   describe('done', () => {
     const base = { type: 'done', runId: 1, success: true, timedOut: false };
 
-    it('A27: accepts done with boolean success and timedOut', () => {
+    it('accepts done with boolean success and timedOut', () => {
       expect(checkWorkerMessage(base)).toStrictEqual({ ok: true, msg: base });
     });
 
@@ -149,7 +149,7 @@ describe('checkWorkerMessage', () => {
       ['a non-string error', { error: 5 }],
       ['a string runId', { runId: '1' }],
       ['an infinite runId', { runId: Infinity }],
-    ])('A27: rejects done with %s', (_name, change) => {
+    ])('rejects done with %s', (_name, change) => {
       expect(checkWorkerMessage({ ...base, ...change })).toStrictEqual({
         ok: false,
         reason: 'malformed done',

@@ -92,7 +92,7 @@ describe('createSandboxRuntime', () => {
     expect(remote.auth).not.toBe(rt.auth);
   });
 
-  it('A15: registers only a js runner by default', () => {
+  it('registers only a js runner by default', () => {
     const rt = build();
     expect(rt.facade.modes).toEqual(['js']);
     expect(rt.facade.runner('js')).toBe(rt.js);
@@ -100,7 +100,7 @@ describe('createSandboxRuntime', () => {
     expect(rt.facade.mode.get()).toBe('js');
   });
 
-  it('A15: extra runners are registered under their keys and reachable via setMode', async () => {
+  it('extra runners are registered under their keys and reachable via setMode', async () => {
     const foo = fakeRunner();
     const rt = create({ jsWorkerFactory, runners: { foo } });
     expect(rt.facade.modes).toEqual(['js', 'foo']);
@@ -113,13 +113,13 @@ describe('createSandboxRuntime', () => {
     rt.dispose();
   });
 
-  it('A15: an extra runner may start as the initial mode', () => {
+  it('an extra runner may start as the initial mode', () => {
     const foo = fakeRunner();
     const rt = create({ jsWorkerFactory, runners: { foo }, initialMode: 'foo' });
     expect(rt.facade.mode.get()).toBe('foo');
   });
 
-  it('A15: an extra runner cannot replace the built-in js runner', () => {
+  it('an extra runner cannot replace the built-in js runner', () => {
     expect(() => create({ jsWorkerFactory, runners: { js: fakeRunner() } })).toThrow(
       /"js"/,
     );

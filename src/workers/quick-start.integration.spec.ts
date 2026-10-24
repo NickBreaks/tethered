@@ -46,4 +46,20 @@ describe('README quick start', () => {
       rt.dispose();
     }
   }, 30_000);
+
+  it('facade.execute() right after abort() waits for the new worker', async () => {
+    const rt = createSandboxRuntime({ jsWorkerFactory: defaultJsWorkerFactory });
+    try {
+      await rt.js.initialize();
+      const hung = rt.facade.execute('for (;;) {}');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await rt.facade.abort();
+      const next = await rt.facade.execute('1 + 1');
+      expect((await hung).success).toBe(false);
+      expect(next.success).toBe(true);
+      expect(next.output.at(-1)?.content).toBe('2');
+    } finally {
+      rt.dispose();
+    }
+  }, 30_000);
 });

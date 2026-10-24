@@ -61,7 +61,7 @@ describe('JsRunner on a real Worker', () => {
     runner.dispose();
   });
 
-  it('A32: superseding a run suspended on a host call completes the new run within 5 s', async () => {
+  it('superseding a run suspended on a host call completes the new run within 5 s', async () => {
     const pA = runner.execute('console.log("a-before"); hang(); console.log("a-after"); "a"', {
       tag: 'A',
     });
@@ -87,7 +87,7 @@ describe('JsRunner on a real Worker', () => {
     expect(runner.activeTag.get()).toBeNull();
   }, 20_000);
 
-  it('A33: abort() stops while (true) {} within 2 s and the next run succeeds', async () => {
+  it('abort() stops while (true) {} within 2 s and the next run succeeds', async () => {
     const p = runner.execute('while (true) {}');
     // Let the worker enter the loop.
     await new Promise((r) => setTimeout(r, 200));

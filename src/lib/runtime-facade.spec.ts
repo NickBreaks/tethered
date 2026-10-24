@@ -128,18 +128,12 @@ describe('RuntimeFacade', () => {
     expect(jsRunner.execute).toHaveBeenLastCalledWith('b', { tag: 'event' });
   });
 
-  it('run() while the active runner is not ready emits a system entry and returns success:false', async () => {
+  it('run() while the active runner is not ready passes the call to the runner', async () => {
     jsRunner._ready.set(false);
+    jsRunner.execute.mockResolvedValueOnce(makeResult({ success: false, error: 'not ready' }));
     const result = await facade.run('1');
-    expect(result.success).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.output).toHaveLength(1);
-    expect(result.output[0].type).toBe('system');
-    expect(result.output[0].content).toBe('JavaScript runtime is not ready yet.');
-    expect(result.error).toBe('JavaScript runtime is not ready yet.');
-    // The entry is added to the facade output.
-    expect(facade.output.get()).toEqual(result.output);
-    expect(jsRunner.execute).not.toHaveBeenCalled();
+    expect(jsRunner.execute).toHaveBeenCalledWith('1');
+    expect(result.error).toBe('not ready');
   });
 
   it('result output replaces the facade output', async () => {
@@ -268,7 +262,7 @@ describe('RuntimeFacade', () => {
   });
 });
 
-// ---------- Pluggable runner map (A12–A14) ----------
+// ---------- Pluggable runner map ----------
 describe('RuntimeFacade — runner map', () => {
   let js: ReturnType<typeof makeMockRunner>;
   let foo: ReturnType<typeof makeMockRunner>;
@@ -284,7 +278,7 @@ describe('RuntimeFacade — runner map', () => {
     facade.dispose();
   });
 
-  it('A12: setMode() accepts any registered key and execute() dispatches to that runner', async () => {
+  it('setMode() accepts any registered key and execute() dispatches to that runner', async () => {
     facade.setMode('foo');
     expect(facade.mode.get()).toBe('foo');
     await facade.execute('bar()', { tag: 't' });
@@ -294,7 +288,7 @@ describe('RuntimeFacade — runner map', () => {
     expect(foo.abort).toHaveBeenCalledOnce();
   });
 
-  it('A12: ready / isRunning / initError track the active runner', () => {
+  it('ready / isRunning / initError track the active runner', () => {
     foo._ready.set(false);
     foo._isRunning.set(true);
     foo._initError.set('foo broke');
@@ -315,7 +309,7 @@ describe('RuntimeFacade — runner map', () => {
     expect(facade.initError.get()).toBeNull();
   });
 
-  it('A12: system entries use the runner label, falling back to the key', async () => {
+  it('system entries use the runner label, falling back to the key', async () => {
     facade.setMode('foo');
     expect(facade.output.get()).toEqual([
       expect.objectContaining({ type: 'system', content: 'Switched to foo mode' }),
@@ -324,19 +318,15 @@ describe('RuntimeFacade — runner map', () => {
     expect(facade.output.get()).toEqual([
       expect.objectContaining({ type: 'system', content: 'Switched to JavaScript mode' }),
     ]);
-    foo._ready.set(false);
-    facade.setMode('foo');
-    const result = await facade.execute('x');
-    expect(result.error).toBe('foo runtime is not ready yet.');
   });
 
-  it('A12: modes lists the keys and runner() returns the registered runner', () => {
+  it('modes lists the keys and runner() returns the registered runner', () => {
     expect(facade.modes).toEqual(['js', 'foo']);
     expect(facade.runner('foo')).toBe(foo);
     expect(() => facade.runner('nope')).toThrow(/nope/);
   });
 
-  it('A13: setMode() with an unknown key throws naming it and changes nothing', async () => {
+  it('setMode() with an unknown key throws naming it and changes nothing', async () => {
     const out = [{ type: 'log' as const, content: 'kept', timestamp: 0 }];
     js.execute.mockResolvedValueOnce(makeResult({ output: out }));
     await facade.execute('x');
@@ -354,11 +344,11 @@ describe('RuntimeFacade — runner map', () => {
     expect(js.abort).not.toHaveBeenCalled();
   });
 
-  it('A13: an unknown initial mode throws at construction', () => {
+  it('an unknown initial mode throws at construction', () => {
     expect(() => new RuntimeFacade({ js }, 'nope')).toThrow(/Unknown mode "nope"/);
   });
 
-  it('A14: switching to a runner that is not ready initializes it exactly once', () => {
+  it('switching to a runner that is not ready initializes it exactly once', () => {
     foo._ready.set(false);
     facade.setMode('foo');
     facade.setMode('js');
@@ -367,7 +357,7 @@ describe('RuntimeFacade — runner map', () => {
     expect(js.initialize).not.toHaveBeenCalled();
   });
 
-  it('A14: a rejected initialize() surfaces through initError without an unhandled rejection', async () => {
+  it('a rejected initialize() surfaces through initError without an unhandled rejection', async () => {
     const unhandled = vi.fn();
     const proc = (globalThis as { process?: { on(e: string, fn: () => void): void; off(e: string, fn: () => void): void } }).process;
     proc?.on('unhandledRejection', unhandled);
@@ -387,7 +377,7 @@ describe('RuntimeFacade — runner map', () => {
     }
   });
 
-  it("A14: the runner's own initError wins over the facade's record", async () => {
+  it("the runner's own initError wins over the facade's record", async () => {
     foo._ready.set(false);
     foo.initialize.mockImplementationOnce(async () => {
       foo._initError.set('runner says why');

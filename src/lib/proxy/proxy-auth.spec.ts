@@ -21,13 +21,13 @@ describe('ProxyAuth', () => {
     sessionStorage.clear();
   });
 
-  describe('proxyBase() tri-state (A-01..A-03)', () => {
+  describe('proxyBase() tri-state', () => {
     it.each<[string, string | null | undefined, string | null]>([
-      ['A-01: returns empty string when corsProxyUrl is empty (dev default)', '', ''],
-      ['A-02: returns null when corsProxyUrl is null (proxy disabled)', null, null],
-      ['A-02: returns null when corsProxyUrl is undefined (proxy disabled)', undefined, null],
+      ['returns empty string when corsProxyUrl is empty (dev default)', '', ''],
+      ['returns null when corsProxyUrl is null (proxy disabled)', null, null],
+      ['returns null when corsProxyUrl is undefined (proxy disabled)', undefined, null],
       [
-        'A-03: returns the absolute URL when corsProxyUrl is an absolute URL',
+        'returns the absolute URL when corsProxyUrl is an absolute URL',
         'https://proxy.example.com',
         'https://proxy.example.com',
       ],
@@ -37,7 +37,7 @@ describe('ProxyAuth', () => {
     });
   });
 
-  describe('authHeader() fresh-read invariant (A-04..A-06)', () => {
+  describe('authHeader() fresh-read invariant', () => {
     it.each<[string, () => void]>([
       ['sessionStorage is empty', () => {}],
       ['the stored token is an empty string', () => sessionStorage.setItem('cors_proxy_auth_token', '')],
@@ -63,7 +63,7 @@ describe('ProxyAuth', () => {
     });
   });
 
-  describe('setToken() trimming (A-07)', () => {
+  describe('setToken() trimming', () => {
     it("stores 'abc' for input '  abc  '", () => {
       service.setToken('  abc  ');
       expect(sessionStorage.getItem('cors_proxy_auth_token')).toBe('abc');
@@ -71,7 +71,7 @@ describe('ProxyAuth', () => {
     });
   });
 
-  describe('clearToken() and invalidate() (A-08..A-10)', () => {
+  describe('clearToken() and invalidate()', () => {
     it('clearToken removes the sessionStorage entry', () => {
       service.setToken('x');
       service.clearToken();

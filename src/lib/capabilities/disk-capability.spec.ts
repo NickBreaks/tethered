@@ -7,16 +7,25 @@ import {
 import variant from '@jitl/quickjs-singlefile-browser-release-asyncify';
 import { DiskCapability, MapDiskBackend, normalizePath } from './disk-capability.js';
 import { injectCapabilityBridge } from '../../workers/capability-bridge.js';
+import { SuspendGate } from '../../workers/engine-async.js';
 import type { SandboxCapability } from './capability.js';
 
 // Injects the capability's guest API the way the worker does: bridge
 // functions that relay to invokeHost on the (test) main thread.
+const gate = new SuspendGate();
 function injectCap(vm: QuickJSAsyncContext, cap: SandboxCapability): void {
   injectCapabilityBridge(
     vm,
     { name: cap.name, stub: cap.stubInfo, setupScript: cap.setupScript },
     (method, args) => cap.invokeHost!(method, args),
+    gate,
   );
+}
+
+// Evaluates guest code the way the worker does: the gate is open, thus a
+// host call can suspend the engine.
+function evalAsync(vm: QuickJSAsyncContext, code: string) {
+  return gate.suspendable(() => vm.evalCodeAsync(code));
 }
 
 describe('DiskCapability', () => {
@@ -41,7 +50,7 @@ describe('DiskCapability', () => {
   });
 
   async function evalAndDump(code: string): Promise<unknown> {
-    const result = await vm.evalCodeAsync(code);
+    const result = await evalAsync(vm, code);
     if ('value' in result) {
       const val = vm.dump(result.value);
       result.value.dispose();
@@ -140,7 +149,7 @@ describe('DiskCapability', () => {
 
     // First execution
     injectCap(vm, cap);
-    const r1 = await vm.evalCodeAsync(`disk.writeFile('/persist.txt', 'data')`);
+    const r1 = await evalAsync(vm, `disk.writeFile('/persist.txt', 'data')`);
     if ('value' in r1) r1.value.dispose();
     else { r1.error.dispose(); throw new Error('Expected success'); }
 
@@ -170,7 +179,7 @@ describe('DiskCapability', () => {
     expect(cap.getBackend()).toBeInstanceOf(MapDiskBackend);
   });
 
-  it('A-21: MapDiskBackend.delete round-trips (write -> delete -> read undefined)', async () => {
+  it('MapDiskBackend.delete round-trips (write -> delete -> read undefined)', async () => {
     const map = new MapDiskBackend();
     await map.write('/f.txt', 'x');
     await map.delete('/f.txt');

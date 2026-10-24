@@ -12,16 +12,25 @@ import {
   LocalStorageBackend,
 } from './storage-capability.js';
 import { injectCapabilityBridge } from '../../workers/capability-bridge.js';
+import { SuspendGate } from '../../workers/engine-async.js';
 import type { SandboxCapability } from './capability.js';
 
 // Injects the capability's guest API the way the worker does: bridge
 // functions that relay to invokeHost on the (test) main thread.
+const gate = new SuspendGate();
 function injectCap(vm: QuickJSAsyncContext, cap: SandboxCapability): void {
   injectCapabilityBridge(
     vm,
     { name: cap.name, stub: cap.stubInfo, setupScript: cap.setupScript },
     (method, args) => cap.invokeHost!(method, args),
+    gate,
   );
+}
+
+// Evaluates guest code the way the worker does: the gate is open, thus a
+// host call can suspend the engine.
+function evalAsync(vm: QuickJSAsyncContext, code: string) {
+  return gate.suspendable(() => vm.evalCodeAsync(code));
 }
 
 describe(
@@ -52,7 +61,7 @@ describe(
     });
 
     async function evalAndDump(code: string): Promise<unknown> {
-      const result = await vm.evalCodeAsync(code);
+      const result = await evalAsync(vm, code);
       if ('value' in result) {
         const val = vm.dump(result.value);
         result.value.dispose();

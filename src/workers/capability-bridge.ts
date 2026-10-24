@@ -6,7 +6,7 @@ import type {
 import type { CapabilityStubInfo } from '../lib/capabilities/capability.js';
 import type { SuspendGate } from './engine-async.js';
 
-export interface CapabilityBridgeSpec {
+interface CapabilityBridgeSpec {
   name: string;
   stub: CapabilityStubInfo;
   /** Guest JS evaluated after bridge injection (for example, fetch's response wrapper). */
@@ -21,15 +21,14 @@ export interface CapabilityBridgeSpec {
  * over postMessage to the main thread. Capability specs also use it and
  * call invokeHost directly.
  *
- * With a `gate`, a call fails with a guest error when the engine cannot
- * suspend. Without a gate, the caller must make sure that the engine can
- * always suspend (for example, it uses only `evalCodeAsync`).
+ * A call fails with a guest error when `gate` tells that the engine cannot
+ * suspend.
  */
 export function injectCapabilityBridge(
   vm: QuickJSAsyncContext,
   spec: CapabilityBridgeSpec,
   invoke: (method: string, args: unknown[]) => Promise<unknown>,
-  gate?: SuspendGate,
+  gate: SuspendGate,
 ): void {
   const makeBridgeFn = (fnName: string): QuickJSHandle =>
     // The engine also accepts a result that is not a promise. Then the
@@ -38,7 +37,7 @@ export function injectCapabilityBridge(
     vm.newAsyncifiedFunction(fnName, ((...handles: QuickJSHandle[]) => {
       // When the engine cannot suspend here, fail at once. Do not return
       // a promise: the engine cannot wait for it.
-      if (gate && !gate.open) {
+      if (!gate.open) {
         return {
           error: vm.newError(
             `${fnName}() cannot run here: a host call cannot suspend the engine in this place.`,
@@ -48,7 +47,7 @@ export function injectCapabilityBridge(
       // Dumping an argument can call guest code (toJSON). A host call
       // from that code cannot suspend, thus the gate is closed for it.
       const dumpArgs = (): unknown[] => handles.map((h) => vm.dump(h));
-      const args = gate ? gate.hostOnly(dumpArgs) : dumpArgs();
+      const args = gate.hostOnly(dumpArgs);
       return relay(fnName, args);
     }) as AsyncFunctionImplementation);
 

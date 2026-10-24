@@ -16,7 +16,7 @@ describe('default JS worker factory', () => {
       ['defaultJsWorkerFactory', defaultJsWorkerFactory],
       ['createJsWorkerFactory()', createJsWorkerFactory()],
       ['createJsWorkerFactory({ allowInProcess: false })', createJsWorkerFactory({ allowInProcess: false })],
-    ])('A29: %s fails initialize() naming allowInProcess and sets initError', async (_, factory) => {
+    ])('%s fails initialize() naming allowInProcess and sets initError', async (_, factory) => {
       const runner = new JsRunner(new CapabilityStore(), { workerFactory: factory });
       try {
         await expect(runner.initialize()).rejects.toThrow(/allowInProcess/);
@@ -27,7 +27,7 @@ describe('default JS worker factory', () => {
       }
     });
 
-    it('A30: allowInProcess: true falls back to the in-process host', () => {
+    it('allowInProcess: true falls back to the in-process host', () => {
       const worker = createJsWorkerFactory({ allowInProcess: true })();
       try {
         expect(worker).toBeInstanceOf(InProcessJsWorker);
@@ -51,7 +51,7 @@ describe('default JS worker factory', () => {
       ['defaultJsWorkerFactory', defaultJsWorkerFactory],
       ['createJsWorkerFactory()', createJsWorkerFactory()],
       ['createJsWorkerFactory({ allowInProcess: true })', createJsWorkerFactory({ allowInProcess: true })],
-    ])('A31: %s spawns a real module Worker', (_, factory) => {
+    ])('%s spawns a real module Worker', (_, factory) => {
       const worker = factory() as unknown as StubWorker;
       expect(worker).toBeInstanceOf(StubWorker);
       // The URL points at the worker entry. Vite rewrites it to the

@@ -41,6 +41,13 @@ console.log(result.success, result.output);
 rt.dispose();
 ```
 
+## Browser support
+
+tethered must have module workers (`new Worker(url, { type: 'module' })`)
+and WebAssembly. The disk capability also uses IndexedDB. CI runs the
+browser suite on Chromium only. Other browsers with these features
+should work, but CI does not test them.
+
 ## Security
 
 > Guest JavaScript run by the built-in JS runner, inside a real web
@@ -76,7 +83,14 @@ patch release (0.x.y) will not break the API. The
 - [Development](docs/development.md): build, test, lint, release.
 - [Writing style](docs/writing-style.md): the ASD-STE100 rules for docs
   and comments.
-- [Demo](demo/main.ts): a small vanilla TS playground (`npm run dev:demo`). It is on GitHub Pages.
+- [Live demo](https://nickbreaks.github.io/tethered/): a small vanilla TS
+  playground ([source](demo/main.ts), `npm run dev:demo`).
+
+## Contributing
+
+Report bugs and send pull requests on
+[GitHub](https://github.com/NickBreaks/tethered/issues). Read
+[CONTRIBUTING.md](CONTRIBUTING.md) first.
 
 ## License
 

@@ -73,10 +73,6 @@ export function createSandboxRuntime(options: SandboxRuntimeOptions): SandboxRun
   if (Object.hasOwn(extra, 'js')) {
     throw new Error('The "js" mode is built in; pass extra runners under other keys.');
   }
-  const initialMode = options.initialMode ?? 'js';
-  if (initialMode !== 'js' && !Object.hasOwn(extra, initialMode)) {
-    throw new Error(`Unknown mode "${initialMode}"; registered modes: ${['js', ...Object.keys(extra)].join(', ')}.`);
-  }
   const registry = new CapabilityStore();
   const auth = new ProxyAuth(options.corsProxyUrl ?? null);
   const js = new JsRunner(registry, {
@@ -87,7 +83,8 @@ export function createSandboxRuntime(options: SandboxRuntimeOptions): SandboxRun
     recoverExhaustion: options.jsRecoverExhaustion,
     bootTimeoutMs: options.jsBootTimeoutMs,
   });
-  const facade = new RuntimeFacade({ js, ...extra }, initialMode);
+  // The facade throws if `initialMode` is unknown.
+  const facade = new RuntimeFacade({ js, ...extra }, options.initialMode ?? 'js');
 
   return {
     facade,

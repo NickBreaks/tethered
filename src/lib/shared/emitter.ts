@@ -4,7 +4,7 @@
  * not for values. `subscribe(fn)` returns an unsubscribe function.
  * `emit()` calls every subscriber synchronously, in subscription order.
  */
-export interface Emitter<T> {
+interface Emitter<T> {
   emit(event: T): void;
   subscribe(fn: (event: T) => void): () => void;
   /** Drops every subscriber (used by `dispose()`). */

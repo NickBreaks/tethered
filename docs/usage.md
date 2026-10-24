@@ -120,10 +120,11 @@ rt.registry.setEnabled('fetch', true);
   Cross-origin requests can go through a CORS proxy (`corsProxyUrl`).
   Refer to the [proxy protocol](proxy-protocol.md).
 - **storage**: the `localStorage` of the page, under a fixed key prefix.
-  To change this, give your own backend (`getItem`/`setItem`/`removeItem`).
+  To change this, give a `MapStorageBackend` or your own `StorageBackend`
+  (`getItem`/`setItem`/`removeItem`).
 - **disk**: by default, a virtual file system in IndexedDB. You can give a
   `MapDiskBackend` or your own `DiskBackend`. Paths are absolute keys.
-  The capability resolves `.` and `..` (`normalizePath`), and `..` never
+  The capability resolves `.` and `..`, and `..` never
   goes above `/`. `IndexedDBDiskBackend` keeps one connection open. Call
   its `close()` to release it.
 - **timer**: guest timers run on virtual time inside the worker. The

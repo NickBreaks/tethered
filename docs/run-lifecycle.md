@@ -13,6 +13,8 @@ This page tells about:
 | Member | What it does |
 | --- | --- |
 | `execute(code, { timeoutMs?, tag? })` | `timeoutMs` overrides the `timeoutMs` of the runner for this run only. `tag` (default `''`) names the caller. `facade.execute` / `facade.run` send the same options to the runner. |
+| `activeTag: ReadableValue<string \| null>` | The tag of the run in flight. It is `null` between runs. Host capabilities can read it inside `invokeHost()` to find who started the run. |
+| `onOutput(fn) => unsubscribe` | The runner calls `fn` for each entry when it adds the entry to the `output` of a started run. Thus, `fn` gets the same entries as the result, in the same order. |
 
 The JS runner accepts a time limit only if it is a finite number greater
 than 0 and at most 2147481647 ms. The backstop adds 2000 ms, and the sum
@@ -29,8 +31,6 @@ must fit in a `setTimeout` delay. These rules apply to:
 
 `bootTimeoutMs` must be a finite number greater than 0 and at most
 2147483647 ms. Else the constructor throws a `RangeError`.
-| `activeTag: ReadableValue<string \| null>` | The tag of the run in flight. It is `null` between runs. Host capabilities can read it inside `invokeHost()` to find who started the run. |
-| `onOutput(fn) => unsubscribe` | The runner calls `fn` for each entry when it adds the entry to the `output` of a started run. Thus, `fn` gets the same entries as the result, in the same order. |
 
 How each runner streams output:
 

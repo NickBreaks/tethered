@@ -113,27 +113,15 @@ export class RuntimeFacade {
     this.#initializeOnce(mode);
   }
 
-  /** Runs `code` on the active runner; `options` are forwarded to it. */
+  /**
+   * Runs `code` on the active runner; `options` are forwarded to it. The
+   * runner decides what occurs when it is not ready. `JsRunner` waits for
+   * a worker that boots, and gives a failed result when no worker boots.
+   */
   async execute(code: string, options?: ExecuteOptions): Promise<ExecutionResult> {
     const myRunId = ++this.#runIdCounter;
     const modeAtStart = this.#mode.get();
     const runner = this.#runners[modeAtStart];
-
-    if (!runner.ready.get()) {
-      const entry: OutputEntry = {
-        type: 'system',
-        content: `${this.#label(modeAtStart)} runtime is not ready yet.`,
-        timestamp: Date.now(),
-      };
-      this.#output.update((o) => [...o, entry]);
-      return {
-        success: false,
-        output: [entry],
-        error: entry.content,
-        timedOut: false,
-        durationMs: 0,
-      };
-    }
 
     const result = await (options ? runner.execute(code, options) : runner.execute(code));
 

@@ -4,72 +4,7 @@ This file lists all important changes to this project. tethered follows
 [Semantic Versioning](https://semver.org/) with the 0.x rule: a minor
 release can break the API, and a patch release does not.
 
-## 0.2.1
-
-Fixes:
-
-- `IndexedDBDiskBackend` opens one connection and keeps it. Before, each
-  operation opened a connection and did not close it. The open
-  connections blocked an upgrade or a delete of the database. The backend
-  now closes its connection when a different connection must upgrade or
-  delete the database. The new `close()` method also releases it.
-- `IndexedDBDiskBackend.write` and `delete` settle when the transaction
-  completes. Before, a write reported success also when its transaction
-  aborted later.
-- `FetchCapability` cancels the response body when the run ends before
-  the response arrives. Before, the body read could wait forever if the
-  fetch function ignored the abort signal.
-
-## 0.2.0
-
-Security and correctness fixes. Some changes break the API.
-
-Security:
-
-- A guest can no longer make the runner run its code a second time. The
-  worker reports heap exhaustion with an `exhausted` flag on `done`, from
-  signals that the guest cannot make. The runner does not examine the
-  error text.
-- A guest can no longer cause a false timeout. A run times out only when
-  the interrupt handler stops it.
-- `FetchCapability` reads response bodies with a limit
-  (`maxResponseBytes`, default 10 MiB). `cleanup()` aborts the requests
-  in flight when a run ends.
-- A proxy base with a trailing slash (for example `'/'`) no longer makes
-  a protocol-relative URL. Such a URL could send the token to a different
-  host.
-- The guest URL is resolved once, against `document.baseURI`. The host
-  policy, the route and the request all use that URL.
-
-Fixes:
-
-- `await fetch(...)` and `.then()` chains on the response complete.
-- Host calls (fetch, storage, disk) work in promise jobs and in timer
-  callbacks. Where a host call cannot suspend the engine, the guest gets
-  an error. The run does not stay pending.
-- Promise jobs run after every script, also without the timer
-  capability. A settled top-level promise gives its value or its error.
-- Timers created by top-level code and timers created later use one
-  virtual clock. Thus they fire in the correct sequence.
-- `normalizePath` resolves `.` and `..` segments.
-- The disk database has only the `files` store, at version 1. The
-  unused `write_journal` store is removed.
-
-Breaking changes:
-
-- `timeoutMs` and `bootTimeoutMs` must be finite, larger than 0, and
-  small enough for `setTimeout`. Incorrect values throw a `RangeError`.
-  An incorrect per-run `timeoutMs` gives a failed result.
-- A real out-of-memory error at the memory limit is not run again.
-- `quickjs-emscripten-core` and the asyncify variant are pinned to
-  exactly 0.32.0.
-
-## 0.1.1
-
-- Docs and code comments follow ASD-STE100 (Simplified Technical
-  English). There is no change to the API or to behavior.
-
-## 0.1.0
+## 0.1.0 (not released)
 
 First release.
 
@@ -84,15 +19,23 @@ First release.
   - `'supersede'` (default) or `'queue'` concurrency;
   - periodic replacement of the worker;
   - recovery when the heap has no more memory.
+- Host calls look synchronous to the guest. They also work with `await`,
+  in promise jobs and in timer callbacks.
 - The host does not trust the worker. It checks the shape of every
   message. It answers host calls only for enabled capabilities and
   declared methods. It sends replies only to the worker and run that
   asked.
 - `RuntimeFacade` with a pluggable runner map (`runners` option).
-- Capabilities: `FetchCapability` (direct or through a CORS proxy, with
-  optional `allowHosts` / `denyHosts`), `StorageCapability`,
-  `DiskCapability` (IndexedDB or in-memory), `TimerCapability`, and the
-  `SandboxCapability` interface for your own.
+- Capabilities:
+  - `FetchCapability`: direct or through a CORS proxy, with optional
+    `allowHosts` / `denyHosts` and a body size limit
+    (`maxResponseBytes`).
+  - `StorageCapability`, with `LocalStorageBackend` (default) or
+    `MapStorageBackend`.
+  - `DiskCapability`, with `IndexedDBDiskBackend` (default) or
+    `MapDiskBackend`.
+  - `TimerCapability`: guest timers on a virtual clock.
+  - The `SandboxCapability` interface for your own capabilities.
 - Entry points:
   - `tethered`: the core, with no dependencies;
   - `tethered/workers`: default worker factories, and an opt-in

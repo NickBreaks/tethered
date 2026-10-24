@@ -36,7 +36,7 @@ describe('JsRunner', () => {
 
   beforeAll(async () => {
     registry = new CapabilityStore();
-    // jsdom has no Worker: opt in to the in-process host (A30).
+    // jsdom has no Worker: opt in to the in-process host.
     service = new JsRunner(registry, {
       workerFactory: createJsWorkerFactory({ allowInProcess: true }),
     });
@@ -282,7 +282,7 @@ describe('JsRunner', () => {
     });
 
     // T5: setTimeout fires basic callback
-    it('A23: should fire setTimeout callback and capture console output', async () => {
+    it('should fire setTimeout callback and capture console output', async () => {
       const result = await service.execute(`setTimeout(() => console.log('fired'), 0)`);
       expect(result.success).toBe(true);
       expect(logsOf(result.output)).toEqual(['fired']);
@@ -315,7 +315,7 @@ describe('JsRunner', () => {
         ['a', 'b', 'c'],
       ],
       [
-        'A23: should fire setInterval until clearInterval is called',
+        'should fire setInterval until clearInterval is called',
         `
         let count = 0;
         const id = setInterval(() => {
@@ -421,7 +421,7 @@ describe('JsRunner', () => {
     }, 10000);
 
     // T22: Disabled — all four globals throw
-    it('A23: should throw descriptive errors for all four timer globals when disabled', async () => {
+    it('should throw descriptive errors for all four timer globals when disabled', async () => {
       registry.setEnabled('timer', false);
       const names = ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'];
       const result = await service.execute(`
@@ -629,7 +629,7 @@ describe('JsRunner', () => {
 
     // The tests for abort() during a run are in the next describe block.
     // The in-process host runs a hot loop on the test thread, so abort()
-    // cannot stop it here. A33 in js-worker.integration.spec.ts tests that
+    // cannot stop it here. The abort spec in js-worker.integration.spec.ts tests that
     // case with a real Worker.
   });
 

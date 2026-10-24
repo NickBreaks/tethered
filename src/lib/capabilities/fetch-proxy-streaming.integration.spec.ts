@@ -34,17 +34,26 @@ import {
 import variant from '@jitl/quickjs-singlefile-browser-release-asyncify';
 import { FetchCapability } from './fetch-capability.js';
 import { injectCapabilityBridge } from '../../workers/capability-bridge.js';
+import { SuspendGate } from '../../workers/engine-async.js';
 import type { SandboxCapability } from './capability.js';
 import type { ProxyAuth } from '../proxy/proxy-auth.js';
 
 // Injects the capability's guest API the way the worker does: bridge
 // functions that relay to invokeHost on the (test) main thread.
+const gate = new SuspendGate();
 function injectCap(vm: QuickJSAsyncContext, cap: SandboxCapability): void {
   injectCapabilityBridge(
     vm,
     { name: cap.name, stub: cap.stubInfo, setupScript: cap.setupScript },
     (method, args) => cap.invokeHost!(method, args),
+    gate,
   );
+}
+
+// Evaluates guest code the way the worker does: the gate is open, thus a
+// host call can suspend the engine.
+function evalAsync(vm: QuickJSAsyncContext, code: string) {
+  return gate.suspendable(() => vm.evalCodeAsync(code));
 }
 
 function makeStubProxyAuth(): ProxyAuth {
@@ -59,7 +68,7 @@ function makeStubProxyAuth(): ProxyAuth {
 }
 
 async function evalAndDump(vm: QuickJSAsyncContext, code: string): Promise<unknown> {
-  const result = await vm.evalCodeAsync(code);
+  const result = await evalAsync(vm, code);
   if (result.error) {
     const err = vm.dump(result.error);
     if (result.error.alive) {

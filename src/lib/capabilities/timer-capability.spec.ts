@@ -16,7 +16,7 @@ describe('TimerCapability', () => {
     });
   });
 
-  it('A22: is a plain descriptor with no engine hooks and no host calls', () => {
+  it('is a plain descriptor with no engine hooks and no host calls', () => {
     const cap: SandboxCapability = new TimerCapability();
     expect('inject' in cap).toBe(false);
     expect(cap.invokeHost).toBeUndefined();

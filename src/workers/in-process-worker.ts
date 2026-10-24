@@ -27,15 +27,28 @@ export class InProcessJsWorker {
   #inbox: JsMainToWorkerMsg[] = [];
 
   constructor() {
-    void import('./worker-host.js').then(({ JsWorkerHost }) => {
-      if (this.#terminated) return;
-      this.#host = new JsWorkerHost((msg) => this.#deliver(msg));
-      const queued = this.#inbox;
-      this.#inbox = [];
-      void this.#host.init().then(() => {
-        for (const msg of queued) this.#host?.handleMessage(msg);
-      });
-    });
+    import('./worker-host.js').then(
+      ({ JsWorkerHost }) => {
+        if (this.#terminated) return;
+        this.#host = new JsWorkerHost((msg) => this.#deliver(msg));
+        const queued = this.#inbox;
+        this.#inbox = [];
+        const host = this.#host;
+        void host.init().then(() => {
+          // terminate() can run while the host boots.
+          if (this.#terminated) return;
+          for (const msg of queued) host.handleMessage(msg);
+        });
+      },
+      (err: unknown) => {
+        // Report the failure at once, as a real worker does. Else
+        // initialize() waits for the full boot timeout.
+        this.#deliver({
+          type: 'init-error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
   }
 
   postMessage(msg: JsMainToWorkerMsg): void {

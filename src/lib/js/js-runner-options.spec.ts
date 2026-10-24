@@ -220,7 +220,7 @@ describe('JsRunner run lifecycle', () => {
       expect(runner.isRunning.get()).toBe(true);
     });
 
-    describe('A34: superseding a run suspended on a host call', () => {
+    describe('superseding a run suspended on a host call', () => {
       let answerHang: (value: unknown) => void;
       let hangCalls: number;
       // hangCap-style host call, held open until the test answers it.
@@ -252,7 +252,7 @@ describe('JsRunner run lifecycle', () => {
         ({ type: 'cap-call', callId, runId, capability, method: capability, args }) as const;
       const capResults = (w: FakeJsWorker) => w.posts.filter((m) => m.type === 'cap-result');
 
-      it('A34: the old run settles as superseded and the new run starts on a fresh worker', async () => {
+      it('the old run settles as superseded and the new run starts on a fresh worker', async () => {
         await build();
         const pA = runner.execute('hang()', { tag: 'A' });
         await settle();
@@ -276,7 +276,7 @@ describe('JsRunner run lifecycle', () => {
         expect((await pB).success).toBe(true);
       });
 
-      it("A34: no late cap-call, output or done from the old run reaches the new run", async () => {
+      it("no late cap-call, output or done from the old run reaches the new run", async () => {
         await build();
         const pA = runner.execute('hang()', { tag: 'A' });
         await settle();
@@ -348,7 +348,7 @@ describe('JsRunner run lifecycle', () => {
         expect(streamed.map((e) => e.content)).toEqual(['7']);
       });
 
-      it('A34: a run superseded while the fresh worker boots never starts', async () => {
+      it('a run superseded while the fresh worker boots never starts', async () => {
         await build();
         const pA = runner.execute('hang()');
         await settle();
@@ -367,7 +367,7 @@ describe('JsRunner run lifecycle', () => {
         expect(runner.isRunning.get()).toBe(false);
       });
 
-      it('A34: isRunning clears when the fresh worker fails to boot', async () => {
+      it('isRunning clears when the fresh worker fails to boot', async () => {
         let bootOk = true;
         runner = new JsRunner(registry, {
           bootTimeoutMs: 50,
@@ -385,14 +385,14 @@ describe('JsRunner run lifecycle', () => {
         expect((await pA).error).toBe(SUPERSEDED);
         expect(runner.isRunning.get()).toBe(true);
         const rB = await pB;
-        expect(rB.error).toBe('WASM module not initialized');
+        expect(rB.error).toBe('The JS worker is not ready.');
         expect(runner.isRunning.get()).toBe(false);
         expect(runner.initError.get()).toBe('JS worker did not become ready within 50 ms.');
         expect(workers[1].runs).toEqual([]);
       });
     });
 
-    describe('A65: abort() while a supersede respawn is in flight', () => {
+    describe('abort() while a supersede respawn is in flight', () => {
       const ABORTED = 'Execution aborted.';
       /** Per spawn: whether the fake worker reports ready by itself. */
       let autoReady: boolean[];
@@ -412,7 +412,7 @@ describe('JsRunner run lifecycle', () => {
         autoReady = [];
       });
 
-      it('A65: the superseding run settles as aborted and is never posted to the new worker', async () => {
+      it('the superseding run settles as aborted and is never posted to the new worker', async () => {
         await buildManual();
         const pA = runner.execute('a()');
         await settle();
@@ -448,7 +448,7 @@ describe('JsRunner run lifecycle', () => {
         expect((await pC).success).toBe(true);
       });
 
-      it('A65: every run waiting on the respawn is cancelled, and abort() when idle stays a no-op', async () => {
+      it('every run waiting on the respawn is cancelled, and abort() when idle stays a no-op', async () => {
         await buildManual();
         const pA = runner.execute('a()');
         await settle();
@@ -469,7 +469,7 @@ describe('JsRunner run lifecycle', () => {
         expect(workers).toHaveLength(2);
       });
 
-      it('A65: a run disposed during the respawn settles as aborted', async () => {
+      it('a run disposed during the respawn settles as aborted', async () => {
         await buildManual();
         const pA = runner.execute('a()');
         await settle();
@@ -483,7 +483,7 @@ describe('JsRunner run lifecycle', () => {
         expect(workers[1].runs).toEqual([]);
       });
 
-      it('A65: a supersede racing the respawn never orphans a spawn', async () => {
+      it('a supersede racing the respawn never orphans a spawn', async () => {
         await buildManual();
         const pA = runner.execute('a()');
         await settle();
@@ -522,7 +522,7 @@ describe('JsRunner run lifecycle', () => {
         expect(workers).toHaveLength(3);
       });
 
-      it("A65: a replaced worker's late error event does not touch initError", async () => {
+      it("a replaced worker's late error event does not touch initError", async () => {
         await buildManual();
         const pA = runner.execute('a()');
         await settle();
@@ -1056,8 +1056,8 @@ describe('JsRunner worker message validation', () => {
     runner?.dispose();
   });
 
-  describe('A28: non-object messages', () => {
-    it('A28: ignores null, primitives, arrays and objects without type during boot', async () => {
+  describe('non-object messages', () => {
+    it('ignores null, primitives, arrays and objects without type during boot', async () => {
       await build(false);
       const init = runner.initialize();
       for (const data of NOT_OBJECTS) current().simulateRaw(data);
@@ -1067,7 +1067,7 @@ describe('JsRunner worker message validation', () => {
       expect(runner.ready.get()).toBe(true);
     });
 
-    it('A28: ignores them during a run, which then completes normally', async () => {
+    it('ignores them during a run, which then completes normally', async () => {
       await build();
       const { p, runId } = await start();
       for (const data of NOT_OBJECTS) current().simulateRaw(data);
@@ -1076,7 +1076,7 @@ describe('JsRunner worker message validation', () => {
       expect((await p).success).toBe(true);
     });
 
-    it('A28: a malformed init-error does not fail boot', async () => {
+    it('a malformed init-error does not fail boot', async () => {
       await build(false);
       const init = runner.initialize();
       current().simulateRaw({ type: 'init-error', message: 42 });
@@ -1088,8 +1088,8 @@ describe('JsRunner worker message validation', () => {
     });
   });
 
-  describe('A24: unknown message types', () => {
-    it('A24: ignores an unknown type and the in-flight run still completes normally', async () => {
+  describe('unknown message types', () => {
+    it('ignores an unknown type and the in-flight run still completes normally', async () => {
       await build();
       const streamed: OutputEntry[] = [];
       runner.onOutput((e) => streamed.push(e));
@@ -1110,7 +1110,7 @@ describe('JsRunner worker message validation', () => {
       expect(streamed).toEqual(result.output);
     });
 
-    it('A24: ignores an unknown type during boot', async () => {
+    it('ignores an unknown type during boot', async () => {
       await build(false);
       const init = runner.initialize();
       current().simulateRaw({ type: 'pwn' });
@@ -1121,7 +1121,7 @@ describe('JsRunner worker message validation', () => {
     });
   });
 
-  describe('A25: malformed output entries', () => {
+  describe('malformed output entries', () => {
     const BAD_ENTRIES: unknown[] = [
       undefined,
       null,
@@ -1135,7 +1135,7 @@ describe('JsRunner worker message validation', () => {
       { type: 'log', content: 'no timestamp' },
     ];
 
-    it('A25: drops an output whose entry is missing, has an unknown type or non-string content', async () => {
+    it('drops an output whose entry is missing, has an unknown type or non-string content', async () => {
       await build();
       const streamed: OutputEntry[] = [];
       runner.onOutput((e) => streamed.push(e));
@@ -1159,7 +1159,7 @@ describe('JsRunner worker message validation', () => {
       expect(result.output.map((e) => e.content)).toEqual(['[no capabilities enabled]', 'good']);
     });
 
-    it('A25: passes on only the known entry fields', async () => {
+    it('passes on only the known entry fields', async () => {
       await build();
       const streamed: OutputEntry[] = [];
       runner.onOutput((e) => streamed.push(e));
@@ -1175,7 +1175,7 @@ describe('JsRunner worker message validation', () => {
     });
   });
 
-  describe('A26: malformed cap-call', () => {
+  describe('malformed cap-call', () => {
     let invokeHost: ReturnType<typeof vi.fn<(method: string, args: unknown[]) => Promise<unknown>>>;
 
     beforeEach(() => {
@@ -1219,7 +1219,7 @@ describe('JsRunner worker message validation', () => {
       ['unknown capability', { callId: 15, capability: 'nope' }],
       ['disabled capability', { callId: 16, capability: 'off' }],
       ['inherited property as capability', { callId: 17, capability: 'constructor' }],
-    ])('A26: %s never reaches invokeHost and gets an error cap-result', async (_, over) => {
+    ])('%s never reaches invokeHost and gets an error cap-result', async (_, over) => {
       await build();
       const { p, runId } = await start();
       call(runId, over);
@@ -1237,7 +1237,7 @@ describe('JsRunner worker message validation', () => {
       ['missing callId', { callId: undefined }],
       ['NaN callId', { callId: Number.NaN }],
       ['non-numeric callId with bad args', { callId: null, args: 'nope' }],
-    ])('A26: %s never reaches invokeHost and gets no reply', async (_, over) => {
+    ])('%s never reaches invokeHost and gets no reply', async (_, over) => {
       await build();
       const { p, runId } = await start();
       call(runId, over);
@@ -1248,7 +1248,7 @@ describe('JsRunner worker message validation', () => {
       expect((await p).success).toBe(true);
     });
 
-    it('A26: checks the host enabled set at call time, not the worker claim', async () => {
+    it('checks the host enabled set at call time, not the worker claim', async () => {
       await build();
       const { p, runId } = await start();
       registry.setEnabled('echo', false);
@@ -1262,7 +1262,7 @@ describe('JsRunner worker message validation', () => {
       await p;
     });
 
-    it('A26: a well-formed call to an enabled capability still reaches invokeHost', async () => {
+    it('a well-formed call to an enabled capability still reaches invokeHost', async () => {
       await build();
       const { p, runId } = await start();
       call(runId, { callId: 31, method: 'get', args: [1, 'a'] });
@@ -1275,7 +1275,7 @@ describe('JsRunner worker message validation', () => {
       await p;
     });
 
-    it('A26: a malformed call for a stale run gets no reply', async () => {
+    it('a malformed call for a stale run gets no reply', async () => {
       await build();
       const { p, runId } = await start();
       call(runId + 99, { callId: 41, args: 'nope' });
@@ -1287,7 +1287,7 @@ describe('JsRunner worker message validation', () => {
     });
   });
 
-  describe('A67: cap-call methods are checked against the declared stub', () => {
+  describe('cap-call methods are checked against the declared stub', () => {
     let invokeHost: ReturnType<typeof vi.fn<(method: string, args: unknown[]) => Promise<unknown>>>;
 
     beforeEach(() => {
@@ -1358,7 +1358,7 @@ describe('JsRunner worker message validation', () => {
       ['the name of a function capability that declares globals', 'clock', 'clock'],
       ['any method of an object capability that declares none', 'bare', 'bare'],
       ['a method declared by another capability', 'echo', 'getItem'],
-    ])('A67: %s never reaches invokeHost and gets an error cap-result', async (_, cap, method) => {
+    ])('%s never reaches invokeHost and gets an error cap-result', async (_, cap, method) => {
       await build();
       const { p, runId } = await start();
       current().simulate(capCall(runId, 5, cap, method));
@@ -1375,7 +1375,7 @@ describe('JsRunner worker message validation', () => {
       ['a declared object method', 'store', 'setItem'],
       ['the function capability name', 'echo', 'echo'],
       ['a declared global', 'clock', 'sleep'],
-    ])('A67: %s reaches invokeHost', async (_, cap, method) => {
+    ])('%s reaches invokeHost', async (_, cap, method) => {
       await build();
       const { p, runId } = await start();
       current().simulate(capCall(runId, 6, cap, method));
@@ -1388,7 +1388,7 @@ describe('JsRunner worker message validation', () => {
       await p;
     });
 
-    it('A67: an un-cloneable host result is answered with an error cap-result', async () => {
+    it('an un-cloneable host result is answered with an error cap-result', async () => {
       await build();
       const { p, runId } = await start();
       await withUnhandledSpy(async (unhandled) => {
@@ -1412,7 +1412,7 @@ describe('JsRunner worker message validation', () => {
       expect((await p).success).toBe(true);
     });
 
-    it('A67: a fallback error reply that also throws is not an unhandled rejection', async () => {
+    it('a fallback error reply that also throws is not an unhandled rejection', async () => {
       await build();
       const { p, runId } = await start();
       await withUnhandledSpy(async (unhandled) => {
@@ -1431,7 +1431,7 @@ describe('JsRunner worker message validation', () => {
     });
   });
 
-  describe('A27: done for the wrong run or with a bad shape', () => {
+  describe('done for the wrong run or with a bad shape', () => {
     it.each([
       ['non-boolean success', (runId: number) => ({ runId, success: 'yes', timedOut: false })],
       ['missing success', (runId: number) => ({ runId, timedOut: false })],
@@ -1449,7 +1449,7 @@ describe('JsRunner worker message validation', () => {
         'an earlier runId',
         (runId: number) => ({ runId: runId - 1, success: true, timedOut: false }),
       ],
-    ])('A27: %s does not settle the active run', async (_, make) => {
+    ])('%s does not settle the active run', async (_, make) => {
       await build();
       const { p, runId } = await start();
       current().simulateRaw({ type: 'done', ...make(runId) });

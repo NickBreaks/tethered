@@ -73,20 +73,35 @@ describe('JsWorkerHost', () => {
       expect(done.exhausted).toBeUndefined();
     }, 10_000);
 
-    it('is set when a capability setup fails before the guest code starts', async () => {
-      const { done } = await run('1', {
-        capabilities: [
-          {
-            name: 'broken',
-            enabled: true,
-            hostBacked: true,
-            stub: { type: 'object', name: 'broken', methods: ['go'] },
-            setupScript: 'throw 1',
-          },
-        ],
-      });
+    const brokenCap: JsCapabilitySnapshot = {
+      name: 'broken',
+      enabled: true,
+      hostBacked: true,
+      stub: { type: 'object', name: 'broken', methods: ['go'] },
+      setupScript: 'throw 1',
+    };
+
+    it('is not set when a capability setup fails and a fresh engine can start', async () => {
+      const { done } = await run('1', { capabilities: [brokenCap] });
       expect(done.success).toBe(false);
       expect(done.error).toContain("capability 'broken' setup failed");
+      expect(done.exhausted).toBeUndefined();
+    }, 10_000);
+
+    it('is set when a capability setup fails and a fresh engine cannot start', async () => {
+      const real = QuickJSAsyncWASMModule.prototype.newRuntime;
+      let calls = 0;
+      vi.spyOn(QuickJSAsyncWASMModule.prototype, 'newRuntime').mockImplementation(function (
+        this: QuickJSAsyncWASMModule,
+        ...args: Parameters<typeof real>
+      ) {
+        calls++;
+        if (calls === 2) throw new Error('engine failed');
+        return real.apply(this, args);
+      });
+      const { done } = await run('1', { capabilities: [brokenCap] });
+      expect(calls).toBe(2);
+      expect(done.success).toBe(false);
       expect(done.exhausted).toBe(true);
     }, 10_000);
 

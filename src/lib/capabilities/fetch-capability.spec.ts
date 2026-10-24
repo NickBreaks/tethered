@@ -8,17 +8,26 @@ import {
 import variant from '@jitl/quickjs-singlefile-browser-release-asyncify';
 import { FetchCapability, type FetchCapabilityOptions } from './fetch-capability.js';
 import { injectCapabilityBridge } from '../../workers/capability-bridge.js';
+import { SuspendGate } from '../../workers/engine-async.js';
 import type { SandboxCapability } from './capability.js';
 import type { ProxyAuth } from '../proxy/proxy-auth.js';
 
 // Injects the capability's guest API the way the worker does: bridge
 // functions that relay to invokeHost on the (test) main thread.
+const gate = new SuspendGate();
 function injectCap(vm: QuickJSAsyncContext, cap: SandboxCapability): void {
   injectCapabilityBridge(
     vm,
     { name: cap.name, stub: cap.stubInfo, setupScript: cap.setupScript },
     (method, args) => cap.invokeHost!(method, args),
+    gate,
   );
+}
+
+// Evaluates guest code the way the worker does: the gate is open, thus a
+// host call can suspend the engine.
+function evalAsync(vm: QuickJSAsyncContext, code: string) {
+  return gate.suspendable(() => vm.evalCodeAsync(code));
 }
 
 type ProxyAuthStubOverrides = Partial<{
@@ -66,7 +75,7 @@ describe('FetchCapability', () => {
 
   // Helper: evalCodeAsync returns the resolved value for asyncified functions
   async function evalAndDump(code: string): Promise<unknown> {
-    const result = await vm.evalCodeAsync(code);
+    const result = await evalAsync(vm, code);
     if (result.error) {
       const errorHandle = result.error;
       const err = vm.dump(errorHandle);
@@ -210,7 +219,7 @@ describe('FetchCapability', () => {
       }).status;`,
       { url: 'https://api.example.com/data', method: 'PUT', headers: { 'X-A': '1' }, body: 'payload' },
     ],
-  ])('A-11: cross-origin URL routes through POST /proxy/fetch (%s)', async (_name, code, expected) => {
+  ])('cross-origin URL routes through POST /proxy/fetch (%s)', async (_name, code, expected) => {
     const spy = vi
       .fn()
       .mockResolvedValue(mockOkResponse('{"hello":"world"}', 'application/json'));
@@ -234,7 +243,7 @@ describe('FetchCapability', () => {
     expect(JSON.parse(init.body)).toEqual(expected);
   });
 
-  it('A-12: X-Proxy-Authorization header present on the proxy POST', async () => {
+  it('X-Proxy-Authorization header present on the proxy POST', async () => {
     const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
     globalThis.fetch = spy;
 
@@ -252,7 +261,7 @@ describe('FetchCapability', () => {
     expect(init.headers['X-Proxy-Authorization']).toBe(`Bearer ${TOKEN}`);
   });
 
-  it('A-13: token string NOT in the body field of the proxy POST', async () => {
+  it('token string NOT in the body field of the proxy POST', async () => {
     const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
     globalThis.fetch = spy;
 
@@ -272,8 +281,8 @@ describe('FetchCapability', () => {
   });
 
   it.each([
-    ['A-14: same-origin URL bypasses the proxy (absolute proxyBase)', 'https://proxy.example.com'],
-    ['A-15: same-origin URL still bypasses when proxyBase is empty string', ''],
+    ['same-origin URL bypasses the proxy (absolute proxyBase)', 'https://proxy.example.com'],
+    ['same-origin URL still bypasses when proxyBase is empty string', ''],
   ])('%s', async (_name, base) => {
     const spy = vi.fn().mockResolvedValue(mockOkResponse('local ok'));
     globalThis.fetch = spy;
@@ -293,7 +302,7 @@ describe('FetchCapability', () => {
     expect(authHeader).not.toHaveBeenCalled();
   });
 
-  it('A-16: proxyBase null routes direct (AC #49 regression)', async () => {
+  it('proxyBase null routes direct (AC #49 regression)', async () => {
     const spy = vi.fn().mockResolvedValue(mockOkResponse('direct'));
     globalThis.fetch = spy;
 
@@ -309,7 +318,7 @@ describe('FetchCapability', () => {
     expect(url).not.toMatch(/\/proxy\/fetch$/);
   });
 
-  it('A-18: 401 from proxy -> invalidate() called + error thrown', async () => {
+  it('401 from proxy -> invalidate() called + error thrown', async () => {
     const invalidate = vi.fn();
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response('unauthorized', { status: 401 }),
@@ -331,7 +340,7 @@ describe('FetchCapability', () => {
     expect(val).toBe('fetch failed: CORS proxy rejected the token. Re-enter a valid token.');
   });
 
-  it('A-19: missing token with proxy enabled throws locked Spec Mod #5 string', async () => {
+  it('missing token with proxy enabled throws the missing-token error', async () => {
     const invalidate = vi.fn();
     globalThis.fetch = vi.fn();
 
@@ -348,7 +357,7 @@ describe('FetchCapability', () => {
 
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(val).toContain(
-      'Proxy fetch failed: no authentication token. Use the token modal to enter your proxy key.',
+      'Proxy fetch failed: no authentication token. Set the proxy token with ProxyAuth.setToken().',
     );
     // With no token, the host does not send the request.
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -358,15 +367,15 @@ describe('FetchCapability', () => {
   // host read the token before the guest looks for it.
   it.each([
     [
-      'A-20: JSON.stringify(globalThis) inside VM does not contain token',
+      'JSON.stringify(globalThis) inside VM does not contain token',
       `JSON.stringify(globalThis) + '|' + Object.keys(globalThis).join(',')`,
     ],
     [
-      'A-21: Object.getOwnPropertyNames(globalThis).join(",") does not contain token',
+      'Object.getOwnPropertyNames(globalThis).join(",") does not contain token',
       `Object.getOwnPropertyNames(globalThis).join(',')`,
     ],
     [
-      'A-22: Function.prototype.toString.call(fetch) does not contain token',
+      'Function.prototype.toString.call(fetch) does not contain token',
       'Function.prototype.toString.call(fetch)',
     ],
   ])('%s', async (_name, expr) => {
@@ -384,7 +393,7 @@ describe('FetchCapability', () => {
     expect(String(dump)).not.toContain(TOKEN);
   });
 
-  it('A-23: the response (.text() and its fields) does not contain token', async () => {
+  it('the response (.text() and its fields) does not contain token', async () => {
     // The proxy response has a header with the token. The guest response
     // gets only status, ok, statusText and the body. Thus the token must
     // not reach the guest.
@@ -411,7 +420,7 @@ describe('FetchCapability', () => {
     expect(view).not.toContain(TOKEN);
   });
 
-  it('A-24: rejected fetch error message does not contain token', async () => {
+  it('rejected fetch error message does not contain token', async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error('network kaboom'));
 
     const cap = new FetchCapability(
@@ -432,7 +441,7 @@ describe('FetchCapability', () => {
 
 
   // ---------------------------------------------------------------
-  // Host allow/deny policy (A36–A42). The capability checks it before any
+  // Host allow/deny policy. The capability checks it before any
   // routing, so a rejected URL never reaches globalThis.fetch (direct or
   // proxy).
   // ---------------------------------------------------------------
@@ -454,7 +463,7 @@ describe('FetchCapability', () => {
     it.each([
       ['direct', null],
       ['proxy', ''],
-    ])('A36: a host outside allowHosts is rejected with no network call (%s)', async (_mode, base) => {
+    ])('a host outside allowHosts is rejected with no network call (%s)', async (_mode, base) => {
       const spy = okFetch();
       const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
       const cap = new FetchCapability(makeStubProxyAuth({ proxyBase: () => base, authHeader }), {
@@ -473,7 +482,7 @@ describe('FetchCapability', () => {
     it.each([
       ['direct', null, 'https://example.com/data'],
       ['proxy', '', `${pageOrigin}/proxy/fetch`],
-    ])('A36: an allowed host goes through (%s)', async (_mode, base, target) => {
+    ])('an allowed host goes through (%s)', async (_mode, base, target) => {
       const spy = okFetch();
       const cap = new FetchCapability(
         makeStubProxyAuth({ proxyBase: () => base, authHeader: () => `Bearer ${TOKEN}` }),
@@ -490,7 +499,7 @@ describe('FetchCapability', () => {
       expect(destination).toBe('https://example.com/data');
     });
 
-    it('A37: a host in both allowHosts and denyHosts is denied', async () => {
+    it('a host in both allowHosts and denyHosts is denied', async () => {
       const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['example.com', 'api.example.com'],
@@ -504,7 +513,7 @@ describe('FetchCapability', () => {
       expect(spy).toHaveBeenCalledTimes(1);
     });
 
-    it('A37: a *. deny entry wins over an exact allow entry', async () => {
+    it('a *. deny entry wins over an exact allow entry', async () => {
       const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['a.example.com'],
@@ -521,7 +530,7 @@ describe('FetchCapability', () => {
       ['https://EVIL.NET./x', false],
       ['https://example.com/', true],
       ['https://sub.evil.net/', true],
-    ])('A37: denyHosts alone blocks only the listed hosts (%s goes through: %s)', async (url, passes) => {
+    ])('denyHosts alone blocks only the listed hosts (%s goes through: %s)', async (url, passes) => {
       const spy = okFetch();
       injectCap(vm, new FetchCapability(makeStubProxyAuth(), { denyHosts: ['evil.net'] }));
 
@@ -542,7 +551,7 @@ describe('FetchCapability', () => {
       'https://example.com:pw@evil.net/',
       'https://sub.example.com/',
       'https://notexample.com/',
-    ])('A38: hostile URL %s is rejected under allowHosts: [example.com]', async (url) => {
+    ])('hostile URL %s is rejected under allowHosts: [example.com]', async (url) => {
       const spy = okFetch();
       injectCap(vm, new FetchCapability(proxyAuthWithToken(), { allowHosts: ['example.com'] }));
 
@@ -554,7 +563,7 @@ describe('FetchCapability', () => {
       'https://EXAMPLE.COM/x',
       'https://example.com./x',
       'http://example.com:8080/x',
-    ])('A38: the hostname matches case-insensitively and ignores a trailing dot and the port (%s)', async (url) => {
+    ])('the hostname matches case-insensitively and ignores a trailing dot and the port (%s)', async (url) => {
       const spy = okFetch();
       injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] }));
 
@@ -562,7 +571,7 @@ describe('FetchCapability', () => {
       expect(spy).toHaveBeenCalledTimes(1);
     });
 
-    it('A38: list entries are normalized (case, whitespace, trailing dot)', async () => {
+    it('list entries are normalized (case, whitespace, trailing dot)', async () => {
       const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['  Example.COM. ', '*.API.Test'],
@@ -581,7 +590,7 @@ describe('FetchCapability', () => {
       ['https://example.com/', false],
       ['https://example.com.evil.net/', false],
       ['https://evilexample.com/', false],
-    ])('A38: subdomains match only through an explicit *. entry (%s goes through: %s)', async (url, passes) => {
+    ])('subdomains match only through an explicit *. entry (%s goes through: %s)', async (url, passes) => {
       const spy = okFetch();
       injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: ['*.example.com'] }));
 
@@ -595,14 +604,14 @@ describe('FetchCapability', () => {
     it.each([
       '', 'https://example.com', 'example.com/path', 'example.com:443',
       'user@example.com', '*', '*.', 'a.*.example.com', 'exa mple.com',
-    ])('A38: invalid list entry %j throws at construction', (bad) => {
+    ])('invalid list entry %j throws at construction', (bad) => {
       const auth = makeStubProxyAuth();
       expect(() => new FetchCapability(auth, { allowHosts: [bad] })).toThrow(TypeError);
       expect(() => new FetchCapability(auth, { denyHosts: [bad] })).toThrow(TypeError);
     });
 
     it.each(['/api/local', 'api/local', sameOrigin])(
-      "A39: under allowHosts: [example.com], the page URL %s is checked against the page's hostname and rejected",
+      "under allowHosts: [example.com], the page URL %s is checked against the page's hostname and rejected",
       async (url) => {
         const spy = okFetch();
         injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] }));
@@ -613,7 +622,7 @@ describe('FetchCapability', () => {
     );
 
     it.each(['/api/local', sameOrigin])(
-      "A39: under allowHosts: [page hostname], the page URL %s goes through",
+      "under allowHosts: [page hostname], the page URL %s goes through",
       async (url) => {
         const spy = okFetch();
         injectCap(
@@ -632,14 +641,14 @@ describe('FetchCapability', () => {
       ['denyHosts: [evil.net]', { denyHosts: ['evil.net'] }],
       ['allowHosts: []', { allowHosts: [] }],
       ['denyHosts: []', { denyHosts: [] }],
-    ])('A39: non-http(s) URLs are rejected whenever a list is configured (%s)', (_label, options) => {
+    ])('non-http(s) URLs are rejected whenever a list is configured (%s)', (_label, options) => {
       it.each([
         'data:text/plain,hello',
         'blob:https://example.com/0e6b1e7c-0000-4000-8000-000000000000',
         'file:///etc/passwd',
         'javascript:alert(1)',
         'ftp://example.com/x',
-      ])('A39: %s is rejected', async (url) => {
+      ])('%s is rejected', async (url) => {
         const spy = okFetch();
         injectCap(vm, new FetchCapability(makeStubProxyAuth(), options));
 
@@ -648,7 +657,7 @@ describe('FetchCapability', () => {
       });
     });
 
-    it('A39: an empty allowHosts list allows nothing', async () => {
+    it('an empty allowHosts list allows nothing', async () => {
       const spy = okFetch();
       injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: [] }));
 
@@ -660,7 +669,7 @@ describe('FetchCapability', () => {
     it.each<[string, FetchCapabilityOptions | undefined]>([
       ['no options', undefined],
       ['empty options', {}],
-    ])('A40: %s leaves non-http(s) and every host untouched', async (_label, options) => {
+    ])('%s leaves non-http(s) and every host untouched', async (_label, options) => {
       const spy = okFetch();
       injectCap(vm, new FetchCapability(makeStubProxyAuth(), options));
 
@@ -672,7 +681,7 @@ describe('FetchCapability', () => {
       ]);
     });
 
-    it("A41: mutating the caller's arrays after construction does not change the policy", async () => {
+    it("mutating the caller's arrays after construction does not change the policy", async () => {
       const spy = okFetch();
       const allowHosts = ['example.com', 'evil.net'];
       const denyHosts = ['evil.net'];
@@ -690,7 +699,7 @@ describe('FetchCapability', () => {
       expect(spy).toHaveBeenCalledTimes(1);
     });
 
-    it('A41: neither the guest nor the capability object exposes the lists', async () => {
+    it('neither the guest nor the capability object exposes the lists', async () => {
       okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['secret-allowed.example'],
@@ -718,7 +727,7 @@ describe('FetchCapability', () => {
       expect((cap as unknown as Record<string, unknown>)['denyHosts']).toBeUndefined();
     });
 
-    it('A41: the guest cannot widen the policy through invokeHost', async () => {
+    it('the guest cannot widen the policy through invokeHost', async () => {
       const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] });
 
@@ -731,7 +740,7 @@ describe('FetchCapability', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('A42: a host-not-allowed error message never contains the proxy token', async () => {
+    it('a host-not-allowed error message never contains the proxy token', async () => {
       const spy = okFetch();
       const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
       const cap = new FetchCapability(proxyAuthWithToken(authHeader), {
@@ -755,7 +764,7 @@ describe('FetchCapability', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    describe('A66: malformed host lists throw instead of failing open', () => {
+    describe('malformed host lists throw instead of failing open', () => {
       it.each([
         ['a leading dot', '.evil.net'],
         ['a leading dot after the wildcard', '*..evil.net'],
@@ -769,7 +778,7 @@ describe('FetchCapability', () => {
         ['a wildcard over a single label with a trailing dot', '*.com.'],
         ['a wildcard over an IPv4 literal', '*.0.0.1'],
         ['a wildcard over an IPv6 literal', '*.[::1]'],
-      ])('A66: %s (%s) throws a TypeError in either list', (_, bad) => {
+      ])('%s (%s) throws a TypeError in either list', (_, bad) => {
         const auth = makeStubProxyAuth();
         expect(() => new FetchCapability(auth, { allowHosts: [bad] })).toThrow(TypeError);
         expect(() => new FetchCapability(auth, { denyHosts: [bad] })).toThrow(TypeError);
@@ -784,7 +793,7 @@ describe('FetchCapability', () => {
         ['null', null],
         ['an object', { 0: 'evil.net', length: 1 }],
         ['a Set', new Set(['evil.net'])],
-      ])('A66: a non-array list (%s) throws a TypeError', (_, list) => {
+      ])('a non-array list (%s) throws a TypeError', (_, list) => {
         const auth = makeStubProxyAuth();
         const asList = list as unknown as readonly string[];
         expect(() => new FetchCapability(auth, { allowHosts: asList })).toThrow(TypeError);
@@ -797,7 +806,7 @@ describe('FetchCapability', () => {
         ['undefined', undefined],
         ['an array', ['evil.net']],
         ['an object with toString', { toString: () => 'evil.net' }],
-      ])('A66: a non-string entry (%s) throws a TypeError', (_, bad) => {
+      ])('a non-string entry (%s) throws a TypeError', (_, bad) => {
         const auth = makeStubProxyAuth();
         const list = [bad] as unknown as readonly string[];
         expect(() => new FetchCapability(auth, { allowHosts: list })).toThrow(TypeError);
@@ -808,13 +817,13 @@ describe('FetchCapability', () => {
         ['null', null],
         ['a string', 'allowHosts'],
         ['a number', 42],
-      ])('A66: a non-object options argument (%s) throws a clear TypeError', (_, bad) => {
+      ])('a non-object options argument (%s) throws a clear TypeError', (_, bad) => {
         expect(
           () => new FetchCapability(makeStubProxyAuth(), bad as unknown as FetchCapabilityOptions),
         ).toThrow(new TypeError('FetchCapability options must be an object.'));
       });
 
-      it('A66: well-formed entries are still accepted (positive control)', async () => {
+      it('well-formed entries are still accepted (positive control)', async () => {
         const spy = okFetch();
         const auth = makeStubProxyAuth();
         expect(() => new FetchCapability(auth)).not.toThrow();
@@ -834,8 +843,8 @@ describe('FetchCapability', () => {
         expect(spy).toHaveBeenCalledTimes(5);
       });
 
-      it('A66: a dotted denyHosts entry that used to deny nothing now cannot be configured', async () => {
-        // Before A66, denyHosts: ['.evil.net'] was accepted and blocked no request.
+      it('a dotted denyHosts entry that used to deny nothing now cannot be configured', async () => {
+        // Before, denyHosts: ['.evil.net'] was accepted and blocked no request.
         expect(
           () => new FetchCapability(makeStubProxyAuth(), { denyHosts: ['.evil.net'] }),
         ).toThrow(/denyHosts/);

@@ -5,11 +5,11 @@ import type {
 } from 'quickjs-emscripten-core';
 import { serialize } from '../lib/shared/serialize.js';
 import type { OutputEntry } from '../lib/shared/sandbox-types.js';
-import { callFunctionAsync, executePendingJobsAsync, SuspendGate } from './engine-async.js';
+import { callFunctionAsync, executePendingJobsAsync, type SuspendGate } from './engine-async.js';
 
-export interface DrainResult {
+interface DrainResult {
   timedOut: boolean;
-  hadError?: boolean;
+  hadError: boolean;
 }
 
 /**
@@ -122,13 +122,6 @@ export class GuestTimers {
     registerClear('clearInterval');
   }
 
-  hasPendingTimers(): boolean {
-    for (const e of this.timers.values()) {
-      if (!e.cleared) return true;
-    }
-    return false;
-  }
-
   /**
    * Runs the promise jobs and the due timers until none remain. Stops when
    * the deadline passes or `interrupted()` is true. `interrupted()` tells
@@ -144,8 +137,8 @@ export class GuestTimers {
     vm: QuickJSAsyncContext,
     emit: (entry: OutputEntry) => void,
     deadlineMs: number,
-    interrupted: () => boolean = () => false,
-    gate: SuspendGate = new SuspendGate(),
+    interrupted: () => boolean,
+    gate: SuspendGate,
   ): Promise<DrainResult> {
     let hadError = false;
     let stepsSinceYield = 0;
@@ -238,9 +231,7 @@ export class GuestTimers {
           // No timers remain, and step 2 ran all promise jobs
           return { timedOut: false, hadError };
         }
-        if (next > this.virtualNow) {
-          this.virtualNow = next;
-        }
+        this.virtualNow = next;
         continue;
       }
 
