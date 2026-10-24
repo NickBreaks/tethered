@@ -85,8 +85,19 @@ describe('DiskCapability', () => {
       disk.writeFile('/a.txt', 'a');
       disk.writeFile('/b.txt', 'b');
       disk.listFiles('/');
-    `);
-    expect(val).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    `) as string[];
+    expect([...val].sort()).toEqual(['a.txt', 'b.txt']);
+  });
+
+  it('listFiles() with no argument lists the root', async () => {
+    const cap = new DiskCapability(backend);
+    injectCap(vm, cap);
+    const val = await evalAndDump(`
+      disk.writeFile('/a.txt', 'a');
+      disk.writeFile('/dir/b.txt', 'b');
+      disk.listFiles();
+    `) as string[];
+    expect([...val].sort()).toEqual(['a.txt', 'dir/']);
   });
 
   it('should list direct children of subdirectory', async () => {
@@ -95,9 +106,12 @@ describe('DiskCapability', () => {
     const val = await evalAndDump(`
       disk.writeFile('/data/hello.txt', 'Hello');
       disk.writeFile('/data/sub/nested.txt', 'Nested');
+      disk.writeFile('/data/sub/other.txt', 'Other');
+      disk.writeFile('/database.txt', 'not a child');
       disk.listFiles('/data');
-    `);
-    expect(val).toEqual(expect.arrayContaining(['hello.txt', 'sub/']));
+    `) as string[];
+    // A subdirectory shows one time. A sibling with the same prefix does not show.
+    expect([...val].sort()).toEqual(['hello.txt', 'sub/']);
   });
 
   it('should overwrite existing file', async () => {
@@ -168,17 +182,29 @@ describe('DiskCapability', () => {
     await expect(map.delete('/nope.txt')).resolves.toBeUndefined();
   });
 
-  it('normalizePath resolves . and .. segments and never goes above the root', () => {
-    expect(normalizePath('/a/../b')).toBe('/b');
-    expect(normalizePath('/a/./b/')).toBe('/a/b');
-    expect(normalizePath('a//b/../c')).toBe('/a/c');
-    expect(normalizePath('/../x')).toBe('/x');
-    expect(normalizePath('../../x/..')).toBe('/');
-    expect(normalizePath('/a/b/../../..')).toBe('/');
-    expect(normalizePath('')).toBe('/');
-    expect(normalizePath('.')).toBe('/');
-    // Only exact '.' and '..' segments are special.
-    expect(normalizePath('/a/.../..b/.c')).toBe('/a/.../..b/.c');
+  // The last case shows that only exact '.' and '..' segments are special.
+  it.each([
+    ['/a/../b', '/b'],
+    ['/a/./b/', '/a/b'],
+    ['a//b/../c', '/a/c'],
+    ['/../x', '/x'],
+    ['../../x/..', '/'],
+    ['/a/b/../../..', '/'],
+    ['', '/'],
+    ['.', '/'],
+    ['/a/.../..b/.c', '/a/.../..b/.c'],
+  ])(
+    'normalizePath resolves . and .. segments and never goes above the root: %j -> %j',
+    (input, expected) => {
+      expect(normalizePath(input)).toBe(expected);
+    },
+  );
+
+  it('invokeHost() rejects an unknown method', async () => {
+    const cap = new DiskCapability(backend);
+    await expect(cap.invokeHost('deleteFile', ['/a.txt'])).rejects.toThrow(
+      'disk.deleteFile is not implemented',
+    );
   });
 
   it('a path with .. reads and writes the same file as its resolved form', async () => {

@@ -22,7 +22,14 @@ import { defaultJsWorkerFactory } from './default-worker-factories.js';
 const SUPERSEDED = 'Execution superseded by a newer run.';
 const ABORTED = 'Execution aborted.';
 
-describe.skipIf(typeof Worker === 'undefined')('JsRunner on a real Worker', () => {
+const echoCap: SandboxCapability = {
+  name: 'echo',
+  description: 'host call that answers at once',
+  stubInfo: { name: 'echo', type: 'function' },
+  invokeHost: async (_method, args) => args[0],
+};
+
+describe('JsRunner on a real Worker', () => {
   let registry: CapabilityStore;
   let runner: JsRunner;
   /** Resolves when the guest reaches the never-resolving host call. */
@@ -37,12 +44,6 @@ describe.skipIf(typeof Worker === 'undefined')('JsRunner on a real Worker', () =
       markHangReached();
       return new Promise<never>(() => {});
     },
-  };
-  const echoCap: SandboxCapability = {
-    name: 'echo',
-    description: 'host call that answers at once',
-    stubInfo: { name: 'echo', type: 'function' },
-    invokeHost: async (_method, args) => args[0],
   };
 
   beforeEach(async () => {
@@ -139,7 +140,7 @@ describe.skipIf(typeof Worker === 'undefined')('JsRunner on a real Worker', () =
   }, 20_000);
 });
 
-describe.skipIf(typeof Worker === 'undefined')('host calls in promise jobs and timers on a real Worker', () => {
+describe('host calls in promise jobs and timers on a real Worker', () => {
   let runner: JsRunner;
   const originalFetch = globalThis.fetch;
   const stubProxyAuth = {
@@ -150,12 +151,6 @@ describe.skipIf(typeof Worker === 'undefined')('host calls in promise jobs and t
     invalidate: vi.fn(),
     tokenInvalid: () => false,
   } as unknown as ProxyAuth;
-  const echoCap: SandboxCapability = {
-    name: 'echo',
-    description: 'host call that answers at once',
-    stubInfo: { name: 'echo', type: 'function' },
-    invokeHost: async (_method, args) => args[0],
-  };
 
   beforeEach(async () => {
     const registry = new CapabilityStore();
@@ -173,7 +168,8 @@ describe.skipIf(typeof Worker === 'undefined')('host calls in promise jobs and t
   });
 
   it('two sequential await fetch() calls in one async function give the result', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async () => new Response('ok', { status: 200 }));
+    const fetchMock = vi.fn().mockImplementation(async () => new Response('ok', { status: 200 }));
+    globalThis.fetch = fetchMock;
     const result = await runner.execute(`(async () => {
       const a = await fetch('https://example.com/a');
       const b = await fetch('https://example.com/b');
@@ -182,6 +178,10 @@ describe.skipIf(typeof Worker === 'undefined')('host calls in promise jobs and t
     expect(result.error).toBeUndefined();
     expect(result.success).toBe(true);
     expect(result.output.filter((e) => e.type === 'result').map((e) => e.content)).toEqual(['400']);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      'https://example.com/a',
+      'https://example.com/b',
+    ]);
   }, 20_000);
 
   it('a host call in a setTimeout callback gives its value', async () => {

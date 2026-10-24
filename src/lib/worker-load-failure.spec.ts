@@ -41,27 +41,30 @@ describe('worker load failure', () => {
     });
     afterEach(() => runner.dispose());
 
-    it('rejects on the worker error event, records initError, and terminates the worker', async () => {
-      const booted = runner.initialize();
-      workers[0].loadError();
-      await expect(booted).rejects.toThrow('JS worker failed to load.');
-      expect(runner.initError.get()).toBe('JS worker failed to load.');
-      expect(runner.ready.get()).toBe(false);
-      expect(workers[0].terminate).toHaveBeenCalled();
-    });
-
-    it('rejects with the worker error message when there is one', async () => {
-      const booted = runner.initialize();
-      workers[0].loadError('404 js-worker');
-      await expect(booted).rejects.toThrow('404 js-worker');
-    });
-
-    it('rejects on an init-error message', async () => {
-      const booted = runner.initialize();
-      workers[0].initError('wasm refused');
-      await expect(booted).rejects.toThrow('wasm refused');
-      expect(runner.initError.get()).toBe('wasm refused');
-    });
+    it.each([
+      [
+        'the worker error event without a message',
+        (w: FakeWorker) => w.loadError(),
+        'JS worker failed to load.',
+      ],
+      [
+        'the worker error event with a message',
+        (w: FakeWorker) => w.loadError('404 js-worker'),
+        '404 js-worker',
+      ],
+      ['an init-error message', (w: FakeWorker) => w.initError('wasm refused'), 'wasm refused'],
+    ])(
+      'rejects on %s, records initError, and terminates the worker',
+      async (_name, fail, message) => {
+        const booted = runner.initialize();
+        expect(workers).toHaveLength(1);
+        fail(workers[0]);
+        await expect(booted).rejects.toThrow(message);
+        expect(runner.initError.get()).toBe(message);
+        expect(runner.ready.get()).toBe(false);
+        expect(workers[0].terminate).toHaveBeenCalled();
+      },
+    );
 
     it('rejects when the factory throws', async () => {
       const throwing = new JsRunner(new CapabilityStore(), {
@@ -69,15 +72,20 @@ describe('worker load failure', () => {
           throw new Error('blocked by CSP');
         },
       });
-      await expect(throwing.initialize()).rejects.toThrow('blocked by CSP');
-      expect(throwing.initError.get()).toBe('blocked by CSP');
-      throwing.dispose();
+      try {
+        await expect(throwing.initialize()).rejects.toThrow('blocked by CSP');
+        expect(throwing.initError.get()).toBe('blocked by CSP');
+        expect(throwing.ready.get()).toBe(false);
+      } finally {
+        throwing.dispose();
+      }
     });
 
     it('is retryable: a later initialize() spawns a fresh worker', async () => {
       const first = runner.initialize();
       workers[0].loadError();
       await expect(first).rejects.toThrow();
+      expect(runner.initError.get()).not.toBeNull();
 
       const second = runner.initialize();
       expect(workers).toHaveLength(2);
@@ -85,6 +93,7 @@ describe('worker load failure', () => {
       await expect(second).resolves.toBeUndefined();
       expect(runner.ready.get()).toBe(true);
       expect(runner.initError.get()).toBeNull();
+      expect(workers[1].terminate).not.toHaveBeenCalled();
     });
   });
 });

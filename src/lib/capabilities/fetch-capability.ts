@@ -226,6 +226,13 @@ export class FetchCapability implements SandboxCapability {
     // A body can ignore the signal of the request (for example, a stream
     // that the host made). Thus an abort also cancels the reader.
     const onAbort = () => void reader.cancel().catch(() => {});
+    // The signal can abort before the body read starts, for example when
+    // a fetch function of the host ignores it. The listener does not fire
+    // for an abort in the past.
+    if (signal.aborted) {
+      onAbort();
+      throw new Error('the request was aborted.');
+    }
     signal.addEventListener('abort', onAbort);
     const decoder = new TextDecoder();
     let total = 0;

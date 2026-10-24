@@ -8,10 +8,9 @@
  * FetchCapability against a stub fetch that aborts mid-stream.
  *
  * Scenarios:
- *   1. Upstream responds 200 with a ReadableStream body whose reader
- *      throws after the first chunk. The client-side fetch observes
- *      a TypeError (`TypeError: Failed to fetch` or the Chromium
- *      equivalent). QuickJS must show that as `fetch failed: ...`.
+ *   1. Upstream responds 200 with a ReadableStream body that errors
+ *      after the first chunk. The host body read fails with the
+ *      stream error. QuickJS must show that as `fetch failed: ...`.
  *
  *   2. Upstream returns a large body (11 MB in a single chunk), and
  *      `maxResponseBytes` is larger. The client receives all of it.
@@ -98,9 +97,9 @@ describe('fetch-proxy-streaming integration', () => {
   });
 
   it('mid-stream abort surfaces as fetch failed: in QuickJS', async () => {
-    // Make a ReadableStream whose reader gives one chunk and then
-    // throws on the second pull. In real browsers, this shows as a
-    // TypeError when the consumer calls .text().
+    // Make a ReadableStream that gives one chunk. The stream calls pull
+    // when the reader takes that chunk, and pull throws. Thus the next
+    // read of the host rejects with the error of pull.
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode('first chunk'));
@@ -129,7 +128,7 @@ describe('fetch-proxy-streaming integration', () => {
       }
     `);
 
-    expect(String(val)).toContain('fetch failed');
+    expect(val).toBe('fetch failed: stream aborted');
   }, 60_000);
 
   it('11 MB single-chunk upstream is consumed without crashing the VM', async () => {

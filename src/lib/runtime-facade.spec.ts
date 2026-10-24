@@ -48,6 +48,10 @@ describe('RuntimeFacade', () => {
     facade = build();
   });
 
+  afterEach(() => {
+    facade.dispose();
+  });
+
   it('construction has no side effects (no runner is initialised)', () => {
     expect(jsRunner.initialize).not.toHaveBeenCalled();
     expect(textRunner.initialize).not.toHaveBeenCalled();
@@ -62,14 +66,33 @@ describe('RuntimeFacade', () => {
     const f = build('text');
     expect(f.mode.get()).toBe('text');
     expect(f.output.get()).toEqual([]);
+    f.dispose();
   });
 
   it('ready/isRunning/initError re-expose the active runner', () => {
     expect(facade.ready.get()).toBe(true);
     jsRunner._ready.set(false);
     expect(facade.ready.get()).toBe(false);
+    expect(facade.isRunning.get()).toBe(false);
     jsRunner._isRunning.set(true);
     expect(facade.isRunning.get()).toBe(true);
+    expect(facade.initError.get()).toBeNull();
+    jsRunner._initError.set('js broke');
+    expect(facade.initError.get()).toBe('js broke');
+  });
+
+  it('ready/isRunning/initError re-expose the text runner in text mode', () => {
+    jsRunner._ready.set(false);
+    jsRunner._isRunning.set(true);
+    jsRunner._initError.set('js broke');
+    facade.setMode('text');
+    expect(facade.ready.get()).toBe(true);
+    expect(facade.isRunning.get()).toBe(false);
+    expect(facade.initError.get()).toBeNull();
+    textRunner._isRunning.set(true);
+    textRunner._initError.set('text broke');
+    expect(facade.isRunning.get()).toBe(true);
+    expect(facade.initError.get()).toBe('text broke');
   });
 
   it('ready follows the mode, notifying subscribers synchronously', () => {
@@ -86,10 +109,16 @@ describe('RuntimeFacade', () => {
     expect(seen).toEqual([false, true]);
   });
 
-  it('run() dispatches to the JS runner while mode is js', async () => {
-    await facade.run('1 + 1');
-    expect(jsRunner.execute).toHaveBeenCalledWith('1 + 1');
-    expect(textRunner.execute).not.toHaveBeenCalled();
+  it.each([
+    ['JS', 'js', '1 + 1'],
+    ['text', 'text', 'plain'],
+  ] as const)('run() dispatches to the %s runner while mode is %s', async (_label, mode, code) => {
+    const runners = { js: jsRunner, text: textRunner };
+    const other = mode === 'js' ? textRunner : jsRunner;
+    facade.setMode(mode);
+    await facade.run(code);
+    expect(runners[mode].execute).toHaveBeenCalledExactlyOnceWith(code);
+    expect(other.execute).not.toHaveBeenCalled();
   });
 
   it('execute()/run() forward per-run options to the active runner', async () => {
@@ -99,18 +128,17 @@ describe('RuntimeFacade', () => {
     expect(jsRunner.execute).toHaveBeenLastCalledWith('b', { tag: 'event' });
   });
 
-  it('run() dispatches to the text runner while mode is text', async () => {
-    facade.setMode('text');
-    await facade.run('plain');
-    expect(textRunner.execute).toHaveBeenCalledWith('plain');
-  });
-
   it('run() while the active runner is not ready emits a system entry and returns success:false', async () => {
     jsRunner._ready.set(false);
     const result = await facade.run('1');
     expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.output).toHaveLength(1);
     expect(result.output[0].type).toBe('system');
-    expect(result.output[0].content).toContain('JavaScript');
+    expect(result.output[0].content).toBe('JavaScript runtime is not ready yet.');
+    expect(result.error).toBe('JavaScript runtime is not ready yet.');
+    // The entry is added to the facade output.
+    expect(facade.output.get()).toEqual(result.output);
     expect(jsRunner.execute).not.toHaveBeenCalled();
   });
 
@@ -189,13 +217,34 @@ describe('RuntimeFacade', () => {
     expect(facade.output.get().some((e) => e.content === 'stale')).toBe(false);
   });
 
+  it('stale result from an older run in the same mode is discarded', async () => {
+    let resolveFirst: (r: ExecutionResult) => void = () => {};
+    jsRunner.execute.mockReturnValueOnce(new Promise<ExecutionResult>((r) => (resolveFirst = r)));
+    const fresh = [{ type: 'log' as const, content: 'fresh', timestamp: 0 }];
+    jsRunner.execute.mockResolvedValueOnce(makeResult({ output: fresh }));
+
+    const firstExecute = facade.run('slow');
+    await facade.run('fast');
+    expect(facade.output.get()).toBe(fresh);
+
+    const staleResult = makeResult({ output: [{ type: 'log', content: 'stale', timestamp: 0 }] });
+    resolveFirst(staleResult);
+    // The caller still gets its own result. Only the facade output ignores it.
+    expect(await firstExecute).toBe(staleResult);
+    expect(facade.output.get()).toBe(fresh);
+  });
+
   it('mode switch during an in-flight run does not throw', async () => {
     let resolve: (r: ExecutionResult) => void = () => {};
     jsRunner.execute.mockReturnValueOnce(new Promise<ExecutionResult>((r) => (resolve = r)));
     const p = facade.run('long');
     expect(() => facade.setMode('text')).not.toThrow();
-    resolve(makeResult());
+    resolve(makeResult({ output: [{ type: 'log', content: 'late', timestamp: 0 }] }));
     await p;
+    // The result of the old mode does not replace the "switched" entry.
+    expect(facade.output.get()).toEqual([
+      expect.objectContaining({ type: 'system', content: 'Switched to Text mode' }),
+    ]);
   });
 
   it('abort() delegates to the active runner', async () => {
@@ -211,49 +260,11 @@ describe('RuntimeFacade', () => {
     facade.output.subscribe(onOutput);
     facade.dispose();
     jsRunner._ready.set(false);
+    // A detached derived value does not compute again.
+    expect(facade.ready.get()).toBe(true);
     facade.setMode('text');
     expect(onReady).not.toHaveBeenCalled();
     expect(onOutput).not.toHaveBeenCalled();
-  });
-});
-
-// ---------- edit-only runner (A15) ----------
-describe('RuntimeFacade — an edit-only runner (A15)', () => {
-  let facade: RuntimeFacade;
-  let jsRunner: ReturnType<typeof makeMockRunner>;
-  let textRunner: ReturnType<typeof makeMockRunner>;
-
-  beforeEach(() => {
-    jsRunner = makeMockRunner(true, 'JavaScript');
-    textRunner = makeMockRunner(true, 'Text');
-    facade = new RuntimeFacade({ js: jsRunner, text: textRunner }, 'text');
-  });
-
-  it('ready is true, isRunning false, initError null in text mode', () => {
-    expect(facade.ready.get()).toBe(true);
-    expect(facade.isRunning.get()).toBe(false);
-    expect(facade.initError.get()).toBeNull();
-  });
-
-  it('execute() in text mode calls the text runner and returns a system "edit-only" entry (A15)', async () => {
-    const editOnlyResult = makeResult({
-      success: true,
-      output: [
-        {
-          type: 'system',
-          content: 'Text is edit-only — switch to JS to run code.',
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    textRunner.execute.mockResolvedValueOnce(editOnlyResult);
-
-    const result = await facade.run('hello');
-
-    expect(textRunner.execute).toHaveBeenCalledWith('hello');
-    expect(jsRunner.execute).not.toHaveBeenCalled();
-    expect(result.output[0].type).toBe('system');
-    expect(result.output[0].content).toContain('edit-only');
   });
 });
 
@@ -267,6 +278,10 @@ describe('RuntimeFacade — runner map', () => {
     js = makeMockRunner(true, 'JavaScript');
     foo = makeMockRunner(true);
     facade = new RuntimeFacade({ js, foo });
+  });
+
+  afterEach(() => {
+    facade.dispose();
   });
 
   it('A12: setMode() accepts any registered key and execute() dispatches to that runner', async () => {

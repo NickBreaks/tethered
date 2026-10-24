@@ -170,7 +170,6 @@ for (const [label, code] of Object.entries(EXAMPLES)) {
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = label;
-  button.dataset['testid'] = `example-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`;
   button.addEventListener('click', () => {
     codeInput.value = code;
   });

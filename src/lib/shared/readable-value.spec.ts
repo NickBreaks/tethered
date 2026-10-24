@@ -28,27 +28,17 @@ describe('createValue', () => {
     expect(seen).toEqual([1, 2]);
   });
 
-  it('notifies only on actual change (Object.is)', () => {
-    const obj = { x: 1 };
-    const v = createValue<unknown>(obj);
+  it.each([
+    ['the same object', { x: 1 }, (o: unknown) => o, false],
+    ['an equal object with a new identity', { x: 1 }, () => ({ x: 1 }), true],
+    ['NaN after NaN', Number.NaN, () => Number.NaN, false],
+    ['-0 after 0', 0, () => -0, true],
+  ])('notifies only on actual change (Object.is): %s', (_name, initial, next, notifies) => {
+    const v = createValue<unknown>(initial);
     const fn = vi.fn();
     v.subscribe(fn);
-    v.set(obj);
-    expect(fn).not.toHaveBeenCalled();
-    v.set({ x: 1 }); // new identity → change
-    expect(fn).toHaveBeenCalledTimes(1);
-
-    const nan = createValue(Number.NaN);
-    const nanFn = vi.fn();
-    nan.subscribe(nanFn);
-    nan.set(Number.NaN);
-    expect(nanFn).not.toHaveBeenCalled();
-
-    const zero = createValue(0);
-    const zeroFn = vi.fn();
-    zero.subscribe(zeroFn);
-    zero.set(-0);
-    expect(zeroFn).toHaveBeenCalledOnce();
+    v.set(next(initial));
+    expect(fn).toHaveBeenCalledTimes(notifies ? 1 : 0);
   });
 
   it('the returned function unsubscribes', () => {
@@ -80,6 +70,21 @@ describe('createValue', () => {
     offSecond = v.subscribe(second);
     v.set(1);
     expect(second).not.toHaveBeenCalled();
+  });
+
+  it('a subscriber added mid-notification gets only the later changes', () => {
+    const v = createValue(0);
+    const late = vi.fn();
+    let added = false;
+    v.subscribe(() => {
+      if (added) return;
+      added = true;
+      v.subscribe(late);
+    });
+    v.set(1);
+    expect(late).not.toHaveBeenCalled();
+    v.set(2);
+    expect(late).toHaveBeenCalledExactlyOnceWith(2);
   });
 
   it('a throwing subscriber does not starve the others', async () => {
@@ -135,6 +140,8 @@ describe('derived', () => {
     expect(sum.get()).toBe(3);
     a.set(10);
     expect(sum.get()).toBe(12);
+    b.set(20);
+    expect(sum.get()).toBe(30);
   });
 
   it('notifies only when the computed result changes', () => {
@@ -156,5 +163,7 @@ describe('derived', () => {
     doubled.dispose();
     n.set(2);
     expect(fn).not.toHaveBeenCalled();
+    // A derived value that is detached does not compute again.
+    expect(doubled.get()).toBe(2);
   });
 });

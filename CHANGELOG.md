@@ -4,6 +4,22 @@ This file lists all important changes to this project. tethered follows
 [Semantic Versioning](https://semver.org/) with the 0.x rule: a minor
 release can break the API, and a patch release does not.
 
+## 0.2.1
+
+Fixes:
+
+- `IndexedDBDiskBackend` opens one connection and keeps it. Before, each
+  operation opened a connection and did not close it. The open
+  connections blocked an upgrade or a delete of the database. The backend
+  now closes its connection when a different connection must upgrade or
+  delete the database. The new `close()` method also releases it.
+- `IndexedDBDiskBackend.write` and `delete` settle when the transaction
+  completes. Before, a write reported success also when its transaction
+  aborted later.
+- `FetchCapability` cancels the response body when the run ends before
+  the response arrives. Before, the body read could wait forever if the
+  fetch function ignored the abort signal.
+
 ## 0.2.0
 
 Security and correctness fixes. Some changes break the API.

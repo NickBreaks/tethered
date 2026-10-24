@@ -78,10 +78,12 @@ describe('host calls outside the top-level script', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    store.clear();
   });
 
   it('two sequential await fetch() calls in one async function give the result', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async () => new Response('ok', { status: 200 }));
+    const fetchMock = vi.fn().mockImplementation(async () => new Response('ok', { status: 200 }));
+    globalThis.fetch = fetchMock;
     const result = await runner.execute(
       `(async () => {
         const a = await fetch('https://example.com/a');
@@ -93,6 +95,10 @@ describe('host calls outside the top-level script', () => {
     expect(result.error).toBeUndefined();
     expect(result.success).toBe(true);
     expect(results(result)).toEqual(['400']);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      'https://example.com/a',
+      'https://example.com/b',
+    ]);
   }, 15_000);
 
   it('a host call in a .then() callback gives its value', async () => {
@@ -117,7 +123,7 @@ describe('host calls outside the top-level script', () => {
     expect(results(result)).toEqual(['9']);
   }, 15_000);
 
-  it('a host error in a promise job rejects the guest call', async () => {
+  it('a host error in a promise job throws in the guest', async () => {
     const result = await runner.execute(
       `(async () => {
         await null;

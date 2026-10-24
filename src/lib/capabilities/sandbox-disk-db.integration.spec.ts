@@ -24,12 +24,17 @@ function countEntries(db: IDBDatabase, storeName: string): Promise<number> {
   });
 }
 
-// IndexedDB is not available in the node/jsdom unit-test runner. These tests
-// must have a real IDB and run only when it is present. The browser
-// integration suite (vitest.integration.config.ts) runs them in Chromium.
-const hasIndexedDB = typeof indexedDB !== 'undefined';
+function putEntry(db: IDBDatabase, storeName: string, key: string, value: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
 
-describe.skipIf(!hasIndexedDB)('openSandboxDisk', () => {
+describe('openSandboxDisk', () => {
   beforeEach(async () => {
     await deleteDb(SANDBOX_DISK_DB_NAME);
   });
@@ -53,16 +58,34 @@ describe.skipIf(!hasIndexedDB)('openSandboxDisk', () => {
   it('two concurrent openSandboxDisk() calls both resolve to usable handles', async () => {
     const [a, b] = await Promise.all([openSandboxDisk(), openSandboxDisk()]);
     try {
-      expect(a).toBeDefined();
-      expect(b).toBeDefined();
+      expect(a).not.toBe(b);
       expect(a.objectStoreNames.contains(FILES_STORE)).toBe(true);
       expect(b.objectStoreNames.contains(FILES_STORE)).toBe(true);
       // Both handles are independently usable
       expect(await countEntries(a, FILES_STORE)).toBe(0);
       expect(await countEntries(b, FILES_STORE)).toBe(0);
+      // Both handles open the same database.
+      await putEntry(a, FILES_STORE, '/f.txt', 'x');
+      expect(await countEntries(b, FILES_STORE)).toBe(1);
     } finally {
       a.close();
       b.close();
+    }
+  });
+
+  it('a second open keeps the files that an earlier open wrote', async () => {
+    const first = await openSandboxDisk();
+    try {
+      await putEntry(first, FILES_STORE, '/keep.txt', 'kept');
+    } finally {
+      first.close();
+    }
+    const second = await openSandboxDisk();
+    try {
+      expect(Array.from(second.objectStoreNames)).toEqual([FILES_STORE]);
+      expect(await countEntries(second, FILES_STORE)).toBe(1);
+    } finally {
+      second.close();
     }
   });
 });

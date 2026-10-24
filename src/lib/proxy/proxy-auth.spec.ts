@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProxyAuth } from './proxy-auth.js';
 
@@ -16,25 +16,34 @@ describe('ProxyAuth', () => {
     service = configureWithProxy(DEFAULT_PROXY);
   });
 
+  afterEach(() => {
+    service.dispose();
+    sessionStorage.clear();
+  });
+
   describe('proxyBase() tri-state (A-01..A-03)', () => {
-    it('A-01: returns empty string when corsProxyUrl is empty (dev default)', () => {
-      const svc = configureWithProxy('');
-      expect(svc.proxyBase()).toBe('');
-    });
-
-    it('A-02: returns null when corsProxyUrl is null (proxy disabled)', () => {
-      const svc = configureWithProxy(null);
-      expect(svc.proxyBase()).toBeNull();
-    });
-
-    it('A-03: returns the absolute URL when corsProxyUrl is an absolute URL', () => {
-      const svc = configureWithProxy('https://proxy.example.com');
-      expect(svc.proxyBase()).toBe('https://proxy.example.com');
+    it.each<[string, string | null | undefined, string | null]>([
+      ['A-01: returns empty string when corsProxyUrl is empty (dev default)', '', ''],
+      ['A-02: returns null when corsProxyUrl is null (proxy disabled)', null, null],
+      ['A-02: returns null when corsProxyUrl is undefined (proxy disabled)', undefined, null],
+      [
+        'A-03: returns the absolute URL when corsProxyUrl is an absolute URL',
+        'https://proxy.example.com',
+        'https://proxy.example.com',
+      ],
+    ])('%s', (_name, corsProxyUrl, expected) => {
+      const svc = new ProxyAuth(corsProxyUrl);
+      expect(svc.proxyBase()).toBe(expected);
     });
   });
 
   describe('authHeader() fresh-read invariant (A-04..A-06)', () => {
-    it('returns null when sessionStorage is empty', () => {
+    it.each<[string, () => void]>([
+      ['sessionStorage is empty', () => {}],
+      ['the stored token is an empty string', () => sessionStorage.setItem('cors_proxy_auth_token', '')],
+      ['setToken got only whitespace', () => service.setToken('   ')],
+    ])('returns null when %s', (_name, arrange) => {
+      arrange();
       expect(service.authHeader()).toBeNull();
     });
 
@@ -89,6 +98,23 @@ describe('ProxyAuth', () => {
     it("uses the exact TOKEN_KEY 'cors_proxy_auth_token'", () => {
       service.setToken('token-value');
       expect(sessionStorage.getItem('cors_proxy_auth_token')).toBe('token-value');
+    });
+
+    it('never uses localStorage', () => {
+      // The trap records each access to localStorage.
+      const touched: PropertyKey[] = [];
+      vi.stubGlobal('localStorage', new Proxy({}, {
+        get: (_target, key) => { touched.push(key); return () => null; },
+      }));
+      try {
+        service.setToken('x');
+        expect(service.authHeader()).toBe('Bearer x');
+        service.clearToken();
+        service.invalidate();
+        expect(touched).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
 
     it('tokenInvalid is exposed as a ReadableValue', () => {

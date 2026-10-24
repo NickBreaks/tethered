@@ -1,3 +1,4 @@
+import { vi } from 'vitest';
 import { CapabilityStore } from './capability-store.js';
 import type { SandboxCapability } from './capability.js';
 
@@ -16,16 +17,24 @@ describe('CapabilityStore', () => {
     registry = new CapabilityStore();
   });
 
+  afterEach(() => {
+    registry.dispose();
+  });
+
   it('should register a capability', () => {
-    registry.register(mockCapability('console'));
+    const cap = mockCapability('console', 'Console output');
+    registry.register(cap);
     expect(registry.capabilities.get()).toEqual([
-      expect.objectContaining({ name: 'console', enabled: false }),
+      { name: 'console', description: 'Console output', enabled: false },
     ]);
+    expect(registry.getCapability('console')).toBe(cap);
+    expect(registry.getAll()).toEqual([cap]);
   });
 
   it('should register capabilities as disabled by default', () => {
     registry.register(mockCapability('console'));
     expect(registry.isEnabled('console')).toBe(false);
+    expect(registry.enabledCapabilities.get()).toEqual([]);
   });
 
   it('should enable a capability', () => {
@@ -42,26 +51,29 @@ describe('CapabilityStore', () => {
   });
 
   it('should return only enabled capabilities', () => {
-    registry.register(mockCapability('console'));
+    const consoleCap = mockCapability('console');
+    registry.register(consoleCap);
     registry.register(mockCapability('fetch'));
     registry.setEnabled('console', true);
 
-    const enabled = registry.enabledCapabilities.get();
-    expect(enabled.length).toBe(1);
-    expect(enabled[0].name).toBe('console');
+    expect(registry.enabledCapabilities.get()).toEqual([consoleCap]);
+    expect(registry.enabledCapabilities.get()[0]).toBe(consoleCap);
   });
 
-  it('should reflect enabled state via isEnabled', () => {
-    registry.register(mockCapability('timer'));
-    expect(registry.isEnabled('timer')).toBe(false);
-    registry.setEnabled('timer', true);
-    expect(registry.isEnabled('timer')).toBe(true);
-    registry.setEnabled('timer', false);
-    expect(registry.isEnabled('timer')).toBe(false);
+  it('getAll() returns every registered capability in registration order, enabled or not', () => {
+    const a = mockCapability('a');
+    const b = mockCapability('b');
+    registry.register(a);
+    registry.register(b);
+    registry.setEnabled('b', true);
+    expect(registry.getAll()).toEqual([a, b]);
   });
 
   it('should not throw for unknown capability name', () => {
     expect(() => registry.setEnabled('nonexistent', true)).not.toThrow();
+    expect(registry.isEnabled('nonexistent')).toBe(false);
+    expect(registry.getCapability('nonexistent')).toBeUndefined();
+    expect(registry.capabilities.get()).toEqual([]);
   });
 
   it('notifies capabilities subscribers on register/toggle, not on no-op toggles', () => {
@@ -71,5 +83,20 @@ describe('CapabilityStore', () => {
     registry.setEnabled('console', true);
     registry.setEnabled('nonexistent', true);
     expect(seen).toEqual([true]);
+    registry.register(mockCapability('fetch'));
+    expect(seen).toEqual([true, true]);
+  });
+
+  it('dispose() drops every subscriber', () => {
+    registry.register(mockCapability('console'));
+    const onCaps = vi.fn();
+    const onEnabled = vi.fn();
+    registry.capabilities.subscribe(onCaps);
+    registry.enabledCapabilities.subscribe(onEnabled);
+    registry.dispose();
+    registry.setEnabled('console', true);
+    registry.register(mockCapability('fetch'));
+    expect(onCaps).not.toHaveBeenCalled();
+    expect(onEnabled).not.toHaveBeenCalled();
   });
 });

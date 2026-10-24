@@ -1,5 +1,5 @@
 import type { SandboxCapability, CapabilityStubInfo } from './capability.js';
-import { openSandboxDisk } from './sandbox-disk-db.js';
+import { FILES_STORE, openSandboxDisk } from './sandbox-disk-db.js';
 
 export interface DiskBackend {
   read(path: string): Promise<string | undefined>;
@@ -9,54 +9,75 @@ export interface DiskBackend {
   delete(path: string): Promise<void>;
 }
 
+/**
+ * Keeps the files in the `__sandbox_disk__` IndexedDB database. The backend
+ * opens one connection on the first call and keeps it. It closes the
+ * connection when a different connection must upgrade or delete the
+ * database, and opens a new one on the next call. Each operation settles
+ * when its transaction completes, thus an aborted write is an error.
+ */
 export class IndexedDBDiskBackend implements DiskBackend {
-  private readonly storeName = 'files';
-
-  private openDB(): Promise<IDBDatabase> {
-    return openSandboxDisk();
-  }
+  #db: Promise<IDBDatabase> | null = null;
 
   async read(path: string): Promise<string | undefined> {
-    const db = await this.openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, 'readonly');
-      const store = tx.objectStore(this.storeName);
-      const req = store.get(path);
-      req.onsuccess = () => resolve(req.result ?? undefined);
-      req.onerror = () => reject(req.error);
-    });
+    const value = await this.#request<unknown>('readonly', (store) => store.get(path));
+    return value === undefined ? undefined : (value as string);
   }
 
   async write(path: string, content: string): Promise<void> {
-    const db = await this.openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, 'readwrite');
-      const store = tx.objectStore(this.storeName);
-      const req = store.put(content, path);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    await this.#request('readwrite', (store) => store.put(content, path));
   }
 
   async list(): Promise<string[]> {
-    const db = await this.openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, 'readonly');
-      const store = tx.objectStore(this.storeName);
-      const req = store.getAllKeys();
-      req.onsuccess = () => resolve(req.result as string[]);
-      req.onerror = () => reject(req.error);
-    });
+    return (await this.#request('readonly', (store) => store.getAllKeys())) as string[];
   }
 
   async delete(path: string): Promise<void> {
-    const db = await this.openDB();
+    await this.#request('readwrite', (store) => store.delete(path));
+  }
+
+  /** Closes the connection. The next operation opens a new connection. */
+  close(): void {
+    const db = this.#db;
+    this.#db = null;
+    void db?.then((d) => d.close(), () => {});
+  }
+
+  #open(): Promise<IDBDatabase> {
+    if (this.#db) return this.#db;
+    const opening = openSandboxDisk().then((db) => {
+      // An open connection blocks an upgrade or a delete from a different
+      // connection, for example in a different tab. Release it.
+      const forget = () => {
+        if (this.#db === opening) this.#db = null;
+      };
+      db.onversionchange = () => {
+        db.close();
+        forget();
+      };
+      // The browser can also close the connection, for example when the
+      // user clears the site data.
+      db.onclose = forget;
+      return db;
+    });
+    // A failed open is not kept. The next operation tries again.
+    opening.catch(() => {
+      if (this.#db === opening) this.#db = null;
+    });
+    this.#db = opening;
+    return opening;
+  }
+
+  async #request<T>(
+    mode: IDBTransactionMode,
+    op: (store: IDBObjectStore) => IDBRequest<T>,
+  ): Promise<T> {
+    const db = await this.#open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, 'readwrite');
-      const store = tx.objectStore(this.storeName);
-      const req = store.delete(path);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+      const tx = db.transaction(FILES_STORE, mode);
+      const req = op(tx.objectStore(FILES_STORE));
+      tx.oncomplete = () => resolve(req.result);
+      tx.onabort = () => reject(tx.error ?? new Error('disk: the transaction was aborted.'));
     });
   }
 }

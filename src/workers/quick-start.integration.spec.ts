@@ -7,7 +7,7 @@
 import { createSandboxRuntime, FetchCapability } from '../index.js';
 import { defaultJsWorkerFactory } from './default-worker-factories.js';
 
-describe.skipIf(typeof Worker === 'undefined')('README quick start', () => {
+describe('README quick start', () => {
   let originalFetch: typeof globalThis.fetch;
   beforeEach(() => {
     originalFetch = globalThis.fetch;

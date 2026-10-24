@@ -90,14 +90,21 @@ describe('JsWorkerHost', () => {
       expect(done.exhausted).toBe(true);
     }, 10_000);
 
-    it('is set when the engine runtime of the run cannot start', async () => {
-      vi.spyOn(QuickJSAsyncWASMModule.prototype, 'newRuntime').mockImplementation(() => {
-        throw new Error('out of memory');
-      });
-      const { done } = await run('1');
-      expect(done.success).toBe(false);
-      expect(done.exhausted).toBe(true);
-    }, 10_000);
+    // A failure before the guest code starts sets the flag, also when its
+    // text does not tell of a spent heap.
+    it.each([['out of memory'], ['engine failed']])(
+      'is set when the engine runtime of the run cannot start (%s)',
+      async (message) => {
+        vi.spyOn(QuickJSAsyncWASMModule.prototype, 'newRuntime').mockImplementation(() => {
+          throw new Error(message);
+        });
+        const { done } = await run('1');
+        expect(done.success).toBe(false);
+        expect(done.error).toBe(message);
+        expect(done.exhausted).toBe(true);
+      },
+      10_000,
+    );
 
     it('is set after an out-of-memory error only when a fresh engine cannot start', async () => {
       const real = QuickJSAsyncWASMModule.prototype.newRuntime;

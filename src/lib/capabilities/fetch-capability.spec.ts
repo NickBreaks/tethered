@@ -102,26 +102,20 @@ describe('FetchCapability', () => {
     });
   });
 
-  it('should return text body', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('Hello World', { status: 200 }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
+  it.each<[string, string, ResponseInit, string, unknown]>([
+    ['should return text body', 'Hello World', { status: 200 }, 'resp.text()', 'Hello World'],
+    ['should return parsed JSON', '{"key":"value"}', { status: 200 }, 'resp.json()', { key: 'value' }],
+    ['should report ok as true for 200', 'OK', { status: 200 }, 'resp.ok', true],
+    ['should report ok as false for 404', 'Not Found', { status: 404, statusText: 'Not Found' }, 'resp.ok', false],
+    ['should return statusText', '', { status: 200, statusText: 'OK' }, 'resp.statusText', 'OK'],
+  ])('%s', async (_name, body, init, expr, expected) => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(body, init));
+    injectCap(vm, new FetchCapability(makeStubProxyAuth()));
     const val = await evalAndDump(`
       var resp = fetch('https://example.com');
-      resp.text();
+      ${expr};
     `);
-    expect(val).toBe('Hello World');
-  });
-
-  it('should return parsed JSON', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('{"key":"value"}', { status: 200 }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
-    const val = await evalAndDump(`
-      var resp = fetch('https://example.com');
-      resp.json();
-    `);
-    expect(val).toEqual({ key: 'value' });
+    expect(val).toEqual(expected);
   });
 
   it('should send POST with body', async () => {
@@ -139,46 +133,9 @@ describe('FetchCapability', () => {
     expect(val).toBe(201);
     expect(globalThis.fetch).toHaveBeenCalledWith('https://example.com/api', expect.objectContaining({
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: '{"data": 1}',
     }));
-  });
-
-  it('should report ok status correctly', async () => {
-    // Test ok = true for 200
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('OK', { status: 200 }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
-    let val = await evalAndDump(`
-      var resp = fetch('https://example.com');
-      resp.ok;
-    `);
-    expect(val).toBe(true);
-
-    // Recreate context for 404 test
-    try { vm.dispose(); } catch { /* ignore */ }
-    try { runtime.dispose(); } catch { /* ignore */ }
-    runtime = module.newRuntime();
-    vm = runtime.newContext();
-
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('Not Found', { status: 404, statusText: 'Not Found' }));
-    const cap2 = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap2);
-    val = await evalAndDump(`
-      var resp = fetch('https://example.com/missing');
-      resp.ok;
-    `);
-    expect(val).toBe(false);
-  });
-
-  it('should return statusText', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 200, statusText: 'OK' }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
-    const val = await evalAndDump(`
-      var resp = fetch('https://example.com');
-      resp.statusText;
-    `);
-    expect(val).toBe('OK');
   });
 
   it('should propagate network errors', async () => {
@@ -193,67 +150,19 @@ describe('FetchCapability', () => {
         e.message;
       }
     `);
-    expect(val).toContain('Failed to fetch');
-    expect(val).toContain('fetch failed');
+    expect(val).toBe('fetch failed: Failed to fetch');
   });
 
-  // ---------------------------------------------------------------
-  // Thenable response: .then() chaining support so LLM agents
-  // can use standard fetch patterns (for example, fetch(url).then(r => r.text()))
-  // ---------------------------------------------------------------
-
-  it('should support .then() on response for text extraction', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('Hello', { status: 200 }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
-    const val = await evalAndDrain(`
-      fetch('https://example.com').then(function(r) { globalThis.out = r.text(); });
-    `);
-    expect(val).toBe('Hello');
-  }, 10_000);
-
-  it('should support chained .then() calls', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('chained', { status: 200 }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
-    const val = await evalAndDrain(`
-      fetch('https://example.com')
-        .then(function(r) { return r.text(); })
-        .then(function(t) { return 'got: ' + t; })
-        .then(function(v) { globalThis.out = v; });
-    `);
-    expect(val).toBe('got: chained');
-  }, 10_000);
-
-  it('should support .then() on response for json extraction', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('{"a":1}', { status: 200 }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
-    const val = await evalAndDrain(`
-      fetch('https://example.com')
-        .then(function(r) { return r.json(); })
-        .then(function(d) { globalThis.out = d.a; });
-    `);
-    expect(val).toBe(1);
-  }, 10_000);
-
-  it('should support .then() with status check', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 201 }));
-    const cap = new FetchCapability(makeStubProxyAuth());
-    injectCap(vm, cap);
-    const val = await evalAndDrain(`
-      fetch('https://example.com')
-        .then(function(r) { globalThis.out = r.status; });
-    `);
-    expect(val).toBe(201);
-  }, 10_000);
-
-  it('should not expose __rawFetch on globalThis', async () => {
+  it('should not expose the raw bridge (__rawFetch or rawFetch) on globalThis', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
     const cap = new FetchCapability(makeStubProxyAuth());
     injectCap(vm, cap);
-    const val = await evalAndDump(`typeof globalThis.__rawFetch;`);
-    expect(val).toBe('undefined');
+    // The raw bridge returns a JSON string. The wrapper returns an object.
+    // Thus an object result shows that the global fetch is the wrapper.
+    const val = await evalAndDump(`
+      [typeof globalThis.__rawFetch, typeof globalThis.rawFetch, typeof fetch('https://example.com')];
+    `);
+    expect(val).toEqual(['undefined', 'undefined', 'object']);
   });
 
   // ---------------------------------------------------------------
@@ -269,7 +178,39 @@ describe('FetchCapability', () => {
     });
   }
 
-  it('A-11: cross-origin URL routes through POST /proxy/fetch', async () => {
+  // Replaces globalThis.fetch with a spy that answers 200 'ok' to each call.
+  function okFetch(): ReturnType<typeof vi.fn> {
+    const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
+    globalThis.fetch = spy;
+    return spy;
+  }
+
+  // Runs code in the guest. Returns the error message, or the value of
+  // the code when it does not throw.
+  async function guestTry(code: string): Promise<unknown> {
+    return evalAndDump(`
+      try {
+        ${code}
+      } catch (e) {
+        e.message;
+      }
+    `);
+  }
+
+  it.each<[string, string, Record<string, unknown>]>([
+    [
+      'GET with the defaults',
+      `fetch('https://api.example.com/data').status;`,
+      { url: 'https://api.example.com/data', method: 'GET', headers: {}, body: null },
+    ],
+    [
+      'the method, headers and body of the guest',
+      `fetch('https://api.example.com/data', {
+        method: 'PUT', headers: { 'X-A': '1' }, body: 'payload'
+      }).status;`,
+      { url: 'https://api.example.com/data', method: 'PUT', headers: { 'X-A': '1' }, body: 'payload' },
+    ],
+  ])('A-11: cross-origin URL routes through POST /proxy/fetch (%s)', async (_name, code, expected) => {
     const spy = vi
       .fn()
       .mockResolvedValue(mockOkResponse('{"hello":"world"}', 'application/json'));
@@ -283,18 +224,14 @@ describe('FetchCapability', () => {
     );
     injectCap(vm, cap);
 
-    await evalAndDump(`
-      var resp = fetch('https://api.example.com/data');
-      resp.status;
-    `);
+    expect(await evalAndDump(code)).toBe(200);
 
     expect(spy).toHaveBeenCalledTimes(1);
     const [proxyUrl, init] = spy.mock.calls[0];
-    expect(proxyUrl).toMatch(/\/proxy\/fetch$/);
+    expect(proxyUrl).toBe(`${window.location.origin}/proxy/fetch`);
     expect(init.method).toBe('POST');
     expect(init.headers['Content-Type']).toBe('application/json');
-    const body = JSON.parse(init.body);
-    expect(body.url).toBe('https://api.example.com/data');
+    expect(JSON.parse(init.body)).toEqual(expected);
   });
 
   it('A-12: X-Proxy-Authorization header present on the proxy POST', async () => {
@@ -334,44 +271,26 @@ describe('FetchCapability', () => {
     expect(JSON.stringify(body)).not.toContain(TOKEN);
   });
 
-  it('A-14: same-origin URL bypasses the proxy', async () => {
+  it.each([
+    ['A-14: same-origin URL bypasses the proxy (absolute proxyBase)', 'https://proxy.example.com'],
+    ['A-15: same-origin URL still bypasses when proxyBase is empty string', ''],
+  ])('%s', async (_name, base) => {
     const spy = vi.fn().mockResolvedValue(mockOkResponse('local ok'));
     globalThis.fetch = spy;
+    const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
 
-    const cap = new FetchCapability(
-      makeStubProxyAuth({
-        proxyBase: () => '',
-        authHeader: () => `Bearer ${TOKEN}`,
-      }),
-    );
+    const cap = new FetchCapability(makeStubProxyAuth({ proxyBase: () => base, authHeader }));
     injectCap(vm, cap);
 
     const sameOrigin = `${window.location.origin}/api/local`;
     await evalAndDump(`fetch(${JSON.stringify(sameOrigin)}).status;`);
 
     expect(spy).toHaveBeenCalledTimes(1);
-    const [url] = spy.mock.calls[0];
+    const [url, init] = spy.mock.calls[0];
     expect(url).toBe(sameOrigin);
-    expect(url).not.toMatch(/\/proxy\/fetch$/);
-  });
-
-  it('A-15: same-origin URL still bypasses when proxyBase is empty string', async () => {
-    const spy = vi.fn().mockResolvedValue(mockOkResponse('local ok'));
-    globalThis.fetch = spy;
-
-    const cap = new FetchCapability(
-      makeStubProxyAuth({
-        proxyBase: () => '',
-        authHeader: () => `Bearer ${TOKEN}`,
-      }),
-    );
-    injectCap(vm, cap);
-
-    const sameOrigin = `${window.location.origin}/api/local`;
-    await evalAndDump(`fetch(${JSON.stringify(sameOrigin)}).status;`);
-
-    const [url] = spy.mock.calls[0];
-    expect(url).toBe(sameOrigin);
+    expect(init.headers).toBeUndefined();
+    // A direct request does not read the token.
+    expect(authHeader).not.toHaveBeenCalled();
   });
 
   it('A-16: proxyBase null routes direct (AC #49 regression)', async () => {
@@ -405,17 +324,11 @@ describe('FetchCapability', () => {
     );
     injectCap(vm, cap);
 
-    const val = await evalAndDump(`
-      try {
-        fetch('https://api.example.com/data');
-        'no error';
-      } catch (e) {
-        e.message;
-      }
-    `);
+    const val = await guestTry(`fetch('https://api.example.com/data'); 'no error';`);
 
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(invalidate).toHaveBeenCalledTimes(1);
-    expect(val).toContain('CORS proxy rejected the token');
+    expect(val).toBe('fetch failed: CORS proxy rejected the token. Re-enter a valid token.');
   });
 
   it('A-19: missing token with proxy enabled throws locked Spec Mod #5 string', async () => {
@@ -431,79 +344,55 @@ describe('FetchCapability', () => {
     );
     injectCap(vm, cap);
 
-    const val = await evalAndDump(`
-      try {
-        fetch('https://api.example.com/data');
-        'no error';
-      } catch (e) {
-        e.message;
-      }
-    `);
+    const val = await guestTry(`fetch('https://api.example.com/data'); 'no error';`);
 
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(val).toContain(
       'Proxy fetch failed: no authentication token. Use the token modal to enter your proxy key.',
     );
+    // With no token, the host does not send the request.
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it('A-20: JSON.stringify(globalThis) inside VM does not contain token', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(mockOkResponse('ok'));
-
-    const cap = new FetchCapability(
-      makeStubProxyAuth({
-        proxyBase: () => '',
-        authHeader: () => `Bearer ${TOKEN}`,
-      }),
-    );
-    injectCap(vm, cap);
+  // Each guest expression runs after a fetch through the proxy. Thus the
+  // host read the token before the guest looks for it.
+  it.each([
+    [
+      'A-20: JSON.stringify(globalThis) inside VM does not contain token',
+      `JSON.stringify(globalThis) + '|' + Object.keys(globalThis).join(',')`,
+    ],
+    [
+      'A-21: Object.getOwnPropertyNames(globalThis).join(",") does not contain token',
+      `Object.getOwnPropertyNames(globalThis).join(',')`,
+    ],
+    [
+      'A-22: Function.prototype.toString.call(fetch) does not contain token',
+      'Function.prototype.toString.call(fetch)',
+    ],
+  ])('%s', async (_name, expr) => {
+    const spy = okFetch();
+    const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
+    injectCap(vm, new FetchCapability(proxyAuthWithToken(authHeader)));
 
     const dump = await evalAndDump(`
-      var keys = Object.keys(globalThis);
-      keys.join(',');
+      var r = fetch('https://api.example.com/data');
+      ${expr};
     `);
 
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(authHeader).toHaveBeenCalled();
     expect(String(dump)).not.toContain(TOKEN);
   });
 
-  it('A-21: Object.getOwnPropertyNames(globalThis).join(",") does not contain token', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(mockOkResponse('ok'));
-
-    const cap = new FetchCapability(
-      makeStubProxyAuth({
-        proxyBase: () => '',
-        authHeader: () => `Bearer ${TOKEN}`,
-      }),
-    );
-    injectCap(vm, cap);
-
-    const dump = await evalAndDump(`
-      Object.getOwnPropertyNames(globalThis).join(',');
-    `);
-
-    expect(String(dump)).not.toContain(TOKEN);
-  });
-
-  it('A-22: Function.prototype.toString.call(fetch) does not contain token', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(mockOkResponse('ok'));
-
-    const cap = new FetchCapability(
-      makeStubProxyAuth({
-        proxyBase: () => '',
-        authHeader: () => `Bearer ${TOKEN}`,
-      }),
-    );
-    injectCap(vm, cap);
-
-    const dump = await evalAndDump(`Function.prototype.toString.call(fetch);`);
-
-    expect(String(dump)).not.toContain(TOKEN);
-  });
-
-  it('A-23: response body via .text() does not contain token', async () => {
-    // Upstream returns a harmless body. The token must not leak through
-    // the proxy response path.
+  it('A-23: the response (.text() and its fields) does not contain token', async () => {
+    // The proxy response has a header with the token. The guest response
+    // gets only status, ok, statusText and the body. Thus the token must
+    // not reach the guest.
     globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response('safe body data with no secrets here', { status: 200 }),
+      new Response('safe body data with no secrets here', {
+        status: 200,
+        headers: { 'X-Echo-Authorization': `Bearer ${TOKEN}` },
+      }),
     );
 
     const cap = new FetchCapability(
@@ -514,8 +403,12 @@ describe('FetchCapability', () => {
     );
     injectCap(vm, cap);
 
-    const body = await evalAndDump(`fetch('https://api.example.com/data').text();`);
-    expect(String(body)).not.toContain(TOKEN);
+    const view = String(await evalAndDump(`
+      var r = fetch('https://api.example.com/data');
+      r.text() + '|' + JSON.stringify(r) + '|' + Object.getOwnPropertyNames(r).join(',');
+    `));
+    expect(view).toContain('safe body data with no secrets here');
+    expect(view).not.toContain(TOKEN);
   });
 
   it('A-24: rejected fetch error message does not contain token', async () => {
@@ -529,38 +422,14 @@ describe('FetchCapability', () => {
     );
     injectCap(vm, cap);
 
-    const val = await evalAndDump(`
-      try {
-        fetch('https://api.example.com/data');
-        'no error';
-      } catch (e) {
-        e.message;
-      }
-    `);
+    const val = await guestTry(`fetch('https://api.example.com/data'); 'no error';`);
 
+    // The error comes from the proxy request, which carries the token.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(val).toBe('fetch failed: network kaboom');
     expect(String(val)).not.toContain(TOKEN);
   });
 
-  it('A-28: hardcoded CORS note absent, fetch failed prefix present', async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('network down'));
-
-    const cap = new FetchCapability(
-      makeStubProxyAuth({ proxyBase: () => null }),
-    );
-    injectCap(vm, cap);
-
-    const val = await evalAndDump(`
-      try {
-        fetch('https://api.example.com/data');
-        'no error';
-      } catch (e) {
-        e.message;
-      }
-    `);
-
-    expect(String(val)).toContain('fetch failed');
-    expect(String(val)).not.toContain('subject to browser CORS policy');
-  });
 
   // ---------------------------------------------------------------
   // Host allow/deny policy (A36–A42). The capability checks it before any
@@ -571,14 +440,7 @@ describe('FetchCapability', () => {
   // Runs fetch(url) in the guest; returns the error message, or
   // 'no error' when the fetch went through.
   async function guestFetch(url: string): Promise<string> {
-    return String(await evalAndDump(`
-      try {
-        fetch(${JSON.stringify(url)});
-        'no error';
-      } catch (e) {
-        e.message;
-      }
-    `));
+    return String(await guestTry(`fetch(${JSON.stringify(url)}); 'no error';`));
   }
 
   function proxyAuthWithToken(authHeader = vi.fn(() => `Bearer ${TOKEN}`)): ProxyAuth {
@@ -586,24 +448,16 @@ describe('FetchCapability', () => {
   }
 
   describe('host allow/deny policy', () => {
-    it('A36: a host outside allowHosts is rejected with no network call (direct)', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const cap = new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] });
-      injectCap(vm, cap);
+    const pageOrigin = window.location.origin;
+    const sameOrigin = `${pageOrigin}/api/local`;
 
-      const msg = await guestFetch('https://other.com/');
-
-      expect(msg).toContain('not allowed');
-      expect(msg).toContain('other.com');
-      expect(spy).not.toHaveBeenCalled();
-    });
-
-    it('A36: a host outside allowHosts is rejected with no network call (proxy)', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+    it.each([
+      ['direct', null],
+      ['proxy', ''],
+    ])('A36: a host outside allowHosts is rejected with no network call (%s)', async (_mode, base) => {
+      const spy = okFetch();
       const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
-      const cap = new FetchCapability(proxyAuthWithToken(authHeader), {
+      const cap = new FetchCapability(makeStubProxyAuth({ proxyBase: () => base, authHeader }), {
         allowHosts: ['example.com'],
       });
       injectCap(vm, cap);
@@ -611,26 +465,33 @@ describe('FetchCapability', () => {
       const msg = await guestFetch('https://other.com/');
 
       expect(msg).toContain('not allowed');
+      expect(msg).toContain('other.com');
       expect(spy).not.toHaveBeenCalled();
       expect(authHeader).not.toHaveBeenCalled();
     });
 
-    it('A36: an allowed host goes through (direct and proxy)', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const cap = new FetchCapability(proxyAuthWithToken(), { allowHosts: ['example.com'] });
+    it.each([
+      ['direct', null, 'https://example.com/data'],
+      ['proxy', '', `${pageOrigin}/proxy/fetch`],
+    ])('A36: an allowed host goes through (%s)', async (_mode, base, target) => {
+      const spy = okFetch();
+      const cap = new FetchCapability(
+        makeStubProxyAuth({ proxyBase: () => base, authHeader: () => `Bearer ${TOKEN}` }),
+        { allowHosts: ['example.com'] },
+      );
       injectCap(vm, cap);
 
       expect(await guestFetch('https://example.com/data')).toBe('no error');
       expect(spy).toHaveBeenCalledTimes(1);
-      const [proxyUrl, init] = spy.mock.calls[0];
-      expect(proxyUrl).toMatch(/\/proxy\/fetch$/);
-      expect(JSON.parse(init.body).url).toBe('https://example.com/data');
+      const [url, init] = spy.mock.calls[0];
+      expect(url).toBe(target);
+      // The proxy gets the destination in the JSON body.
+      const destination = base === null ? url : JSON.parse(init.body).url;
+      expect(destination).toBe('https://example.com/data');
     });
 
     it('A37: a host in both allowHosts and denyHosts is denied', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+      const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['example.com', 'api.example.com'],
         denyHosts: ['api.example.com'],
@@ -644,8 +505,7 @@ describe('FetchCapability', () => {
     });
 
     it('A37: a *. deny entry wins over an exact allow entry', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+      const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['a.example.com'],
         denyHosts: ['*.example.com'],
@@ -656,58 +516,54 @@ describe('FetchCapability', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('A37: denyHosts alone blocks only the listed hosts', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const cap = new FetchCapability(makeStubProxyAuth(), { denyHosts: ['evil.net'] });
-      injectCap(vm, cap);
+    it.each([
+      ['https://evil.net/', false],
+      ['https://EVIL.NET./x', false],
+      ['https://example.com/', true],
+      ['https://sub.evil.net/', true],
+    ])('A37: denyHosts alone blocks only the listed hosts (%s goes through: %s)', async (url, passes) => {
+      const spy = okFetch();
+      injectCap(vm, new FetchCapability(makeStubProxyAuth(), { denyHosts: ['evil.net'] }));
 
-      expect(await guestFetch('https://evil.net/')).toContain('not allowed');
-      expect(await guestFetch('https://EVIL.NET./x')).toContain('not allowed');
-      expect(spy).not.toHaveBeenCalled();
-      expect(await guestFetch('https://example.com/')).toBe('no error');
-      expect(await guestFetch('https://sub.evil.net/')).toBe('no error');
-      expect(spy).toHaveBeenCalledTimes(2);
+      const msg = await guestFetch(url);
+
+      if (passes) expect(msg).toBe('no error');
+      else expect(msg).toContain('not allowed');
+      expect(spy).toHaveBeenCalledTimes(passes ? 1 : 0);
     });
 
-    it('A38: hostile URLs are rejected under allowHosts: [example.com]', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const cap = new FetchCapability(proxyAuthWithToken(), { allowHosts: ['example.com'] });
-      injectCap(vm, cap);
+    it.each([
+      'https://example.com.evil.net/',
+      'https://evil.net/?h=example.com',
+      'https://example.com@evil.net/',
+      'https://evil.net/#example.com',
+      'https://EXAMPLE.com.evil.net/',
+      'https://evil.net/example.com',
+      'https://example.com:pw@evil.net/',
+      'https://sub.example.com/',
+      'https://notexample.com/',
+    ])('A38: hostile URL %s is rejected under allowHosts: [example.com]', async (url) => {
+      const spy = okFetch();
+      injectCap(vm, new FetchCapability(proxyAuthWithToken(), { allowHosts: ['example.com'] }));
 
-      const hostile = [
-        'https://example.com.evil.net/',
-        'https://evil.net/?h=example.com',
-        'https://example.com@evil.net/',
-        'https://evil.net/#example.com',
-        'https://EXAMPLE.com.evil.net/',
-        'https://evil.net/example.com',
-        'https://example.com:pw@evil.net/',
-        'https://sub.example.com/',
-        'https://notexample.com/',
-      ];
-      for (const url of hostile) {
-        expect(await guestFetch(url), url).toContain('not allowed');
-      }
+      expect(await guestFetch(url)).toContain('not allowed');
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('A38: the hostname matches case-insensitively and ignores a trailing dot', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const cap = new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] });
-      injectCap(vm, cap);
+    it.each([
+      'https://EXAMPLE.COM/x',
+      'https://example.com./x',
+      'http://example.com:8080/x',
+    ])('A38: the hostname matches case-insensitively and ignores a trailing dot and the port (%s)', async (url) => {
+      const spy = okFetch();
+      injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] }));
 
-      expect(await guestFetch('https://EXAMPLE.COM/x')).toBe('no error');
-      expect(await guestFetch('https://example.com./x')).toBe('no error');
-      expect(await guestFetch('http://example.com:8080/x')).toBe('no error');
-      expect(spy).toHaveBeenCalledTimes(3);
+      expect(await guestFetch(url)).toBe('no error');
+      expect(spy).toHaveBeenCalledTimes(1);
     });
 
     it('A38: list entries are normalized (case, whitespace, trailing dot)', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+      const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['  Example.COM. ', '*.API.Test'],
       });
@@ -718,87 +574,82 @@ describe('FetchCapability', () => {
       expect(spy).toHaveBeenCalledTimes(2);
     });
 
-    it('A38: subdomains match only through an explicit *. entry', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const cap = new FetchCapability(makeStubProxyAuth(), { allowHosts: ['*.example.com'] });
-      injectCap(vm, cap);
+    // The wildcard matches subdomains only, not the apex.
+    it.each([
+      ['https://api.example.com/', true],
+      ['https://a.b.EXAMPLE.com/', true],
+      ['https://example.com/', false],
+      ['https://example.com.evil.net/', false],
+      ['https://evilexample.com/', false],
+    ])('A38: subdomains match only through an explicit *. entry (%s goes through: %s)', async (url, passes) => {
+      const spy = okFetch();
+      injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: ['*.example.com'] }));
 
-      expect(await guestFetch('https://api.example.com/')).toBe('no error');
-      expect(await guestFetch('https://a.b.EXAMPLE.com/')).toBe('no error');
-      expect(spy).toHaveBeenCalledTimes(2);
-      // The wildcard matches subdomains only, not the apex.
-      expect(await guestFetch('https://example.com/')).toContain('not allowed');
-      expect(await guestFetch('https://example.com.evil.net/')).toContain('not allowed');
-      expect(await guestFetch('https://evilexample.com/')).toContain('not allowed');
-      expect(spy).toHaveBeenCalledTimes(2);
+      const msg = await guestFetch(url);
+
+      if (passes) expect(msg).toBe('no error');
+      else expect(msg).toContain('not allowed');
+      expect(spy).toHaveBeenCalledTimes(passes ? 1 : 0);
     });
 
-    it('A38: invalid list entries throw at construction', () => {
+    it.each([
+      '', 'https://example.com', 'example.com/path', 'example.com:443',
+      'user@example.com', '*', '*.', 'a.*.example.com', 'exa mple.com',
+    ])('A38: invalid list entry %j throws at construction', (bad) => {
       const auth = makeStubProxyAuth();
-      for (const bad of ['', 'https://example.com', 'example.com/path', 'example.com:443',
-        'user@example.com', '*', '*.', 'a.*.example.com', 'exa mple.com']) {
-        expect(() => new FetchCapability(auth, { allowHosts: [bad] }), bad).toThrow(TypeError);
-        expect(() => new FetchCapability(auth, { denyHosts: [bad] }), bad).toThrow(TypeError);
-      }
+      expect(() => new FetchCapability(auth, { allowHosts: [bad] })).toThrow(TypeError);
+      expect(() => new FetchCapability(auth, { denyHosts: [bad] })).toThrow(TypeError);
     });
 
-    it("A39: relative and same-origin URLs are checked against the page's hostname", async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const pageHost = window.location.hostname;
-      const sameOrigin = `${window.location.origin}/api/local`;
+    it.each(['/api/local', 'api/local', sameOrigin])(
+      "A39: under allowHosts: [example.com], the page URL %s is checked against the page's hostname and rejected",
+      async (url) => {
+        const spy = okFetch();
+        injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] }));
 
-      const denied = new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] });
-      injectCap(vm, denied);
-      expect(await guestFetch('/api/local')).toContain('not allowed');
-      expect(await guestFetch('api/local')).toContain('not allowed');
-      expect(await guestFetch(sameOrigin)).toContain('not allowed');
-      expect(spy).not.toHaveBeenCalled();
+        expect(await guestFetch(url)).toContain('not allowed');
+        expect(spy).not.toHaveBeenCalled();
+      },
+    );
 
-      try { vm.dispose(); } catch { /* ignore */ }
-      try { runtime.dispose(); } catch { /* ignore */ }
-      runtime = module.newRuntime();
-      vm = runtime.newContext();
+    it.each(['/api/local', sameOrigin])(
+      "A39: under allowHosts: [page hostname], the page URL %s goes through",
+      async (url) => {
+        const spy = okFetch();
+        injectCap(
+          vm,
+          new FetchCapability(makeStubProxyAuth(), { allowHosts: [window.location.hostname] }),
+        );
 
-      const allowed = new FetchCapability(makeStubProxyAuth(), { allowHosts: [pageHost] });
-      injectCap(vm, allowed);
-      expect(await guestFetch('/api/local')).toBe('no error');
-      expect(await guestFetch(sameOrigin)).toBe('no error');
-      expect(spy).toHaveBeenCalledTimes(2);
-    });
+        expect(await guestFetch(url)).toBe('no error');
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy.mock.calls[0][0]).toBe(sameOrigin);
+      },
+    );
 
-    it('A39: non-http(s) URLs are rejected whenever a list is configured', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      const urls = [
+    describe.each<[string, FetchCapabilityOptions]>([
+      ['allowHosts: [example.com]', { allowHosts: ['example.com'] }],
+      ['denyHosts: [evil.net]', { denyHosts: ['evil.net'] }],
+      ['allowHosts: []', { allowHosts: [] }],
+      ['denyHosts: []', { denyHosts: [] }],
+    ])('A39: non-http(s) URLs are rejected whenever a list is configured (%s)', (_label, options) => {
+      it.each([
         'data:text/plain,hello',
         'blob:https://example.com/0e6b1e7c-0000-4000-8000-000000000000',
         'file:///etc/passwd',
         'javascript:alert(1)',
         'ftp://example.com/x',
-      ];
-      for (const options of [
-        { allowHosts: ['example.com'] },
-        { denyHosts: ['evil.net'] },
-        { allowHosts: [] as string[] },
-        { denyHosts: [] as string[] },
-      ]) {
-        try { vm.dispose(); } catch { /* ignore */ }
-        try { runtime.dispose(); } catch { /* ignore */ }
-        runtime = module.newRuntime();
-        vm = runtime.newContext();
+      ])('A39: %s is rejected', async (url) => {
+        const spy = okFetch();
         injectCap(vm, new FetchCapability(makeStubProxyAuth(), options));
-        for (const url of urls) {
-          expect(await guestFetch(url), `${url} ${JSON.stringify(options)}`).toContain('not allowed');
-        }
-      }
-      expect(spy).not.toHaveBeenCalled();
+
+        expect(await guestFetch(url)).toContain('not allowed');
+        expect(spy).not.toHaveBeenCalled();
+      });
     });
 
     it('A39: an empty allowHosts list allows nothing', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+      const spy = okFetch();
       injectCap(vm, new FetchCapability(makeStubProxyAuth(), { allowHosts: [] }));
 
       expect(await guestFetch('https://example.com/')).toContain('not allowed');
@@ -806,10 +657,12 @@ describe('FetchCapability', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('A40: no options (or empty options) leaves non-http(s) and every host untouched', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
-      injectCap(vm, new FetchCapability(makeStubProxyAuth(), {}));
+    it.each<[string, FetchCapabilityOptions | undefined]>([
+      ['no options', undefined],
+      ['empty options', {}],
+    ])('A40: %s leaves non-http(s) and every host untouched', async (_label, options) => {
+      const spy = okFetch();
+      injectCap(vm, new FetchCapability(makeStubProxyAuth(), options));
 
       expect(await guestFetch('data:text/plain,hello')).toBe('no error');
       expect(await guestFetch('https://anything.example/')).toBe('no error');
@@ -820,8 +673,7 @@ describe('FetchCapability', () => {
     });
 
     it("A41: mutating the caller's arrays after construction does not change the policy", async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+      const spy = okFetch();
       const allowHosts = ['example.com', 'evil.net'];
       const denyHosts = ['evil.net'];
       const cap = new FetchCapability(makeStubProxyAuth(), { allowHosts, denyHosts });
@@ -839,7 +691,7 @@ describe('FetchCapability', () => {
     });
 
     it('A41: neither the guest nor the capability object exposes the lists', async () => {
-      globalThis.fetch = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
+      okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), {
         allowHosts: ['secret-allowed.example'],
         denyHosts: ['secret-denied.example'],
@@ -867,11 +719,12 @@ describe('FetchCapability', () => {
     });
 
     it('A41: the guest cannot widen the policy through invokeHost', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+      const spy = okFetch();
       const cap = new FetchCapability(makeStubProxyAuth(), { allowHosts: ['example.com'] });
 
-      await expect(cap.invokeHost('setPolicy', [{ allowHosts: ['other.com'] }])).rejects.toThrow();
+      await expect(cap.invokeHost('setPolicy', [{ allowHosts: ['other.com'] }])).rejects.toThrow(
+        'fetch.setPolicy is not implemented',
+      );
       await expect(
         cap.invokeHost('fetch', ['https://other.com/', { allowHosts: ['other.com'] }]),
       ).rejects.toThrow(/not allowed/);
@@ -879,8 +732,7 @@ describe('FetchCapability', () => {
     });
 
     it('A42: a host-not-allowed error message never contains the proxy token', async () => {
-      const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-      globalThis.fetch = spy;
+      const spy = okFetch();
       const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
       const cap = new FetchCapability(proxyAuthWithToken(authHeader), {
         allowHosts: ['example.com'],
@@ -939,27 +791,31 @@ describe('FetchCapability', () => {
         expect(() => new FetchCapability(auth, { denyHosts: asList })).toThrow(TypeError);
       });
 
-      it('A66: a non-string entry throws a TypeError', () => {
+      it.each([
+        ['a number', 42],
+        ['null', null],
+        ['undefined', undefined],
+        ['an array', ['evil.net']],
+        ['an object with toString', { toString: () => 'evil.net' }],
+      ])('A66: a non-string entry (%s) throws a TypeError', (_, bad) => {
         const auth = makeStubProxyAuth();
-        for (const bad of [42, null, undefined, ['evil.net'], { toString: () => 'evil.net' }]) {
-          const list = [bad] as unknown as readonly string[];
-          expect(() => new FetchCapability(auth, { allowHosts: list })).toThrow(TypeError);
-          expect(() => new FetchCapability(auth, { denyHosts: list })).toThrow(TypeError);
-        }
+        const list = [bad] as unknown as readonly string[];
+        expect(() => new FetchCapability(auth, { allowHosts: list })).toThrow(TypeError);
+        expect(() => new FetchCapability(auth, { denyHosts: list })).toThrow(TypeError);
       });
 
-      it('A66: a null or non-object options argument throws a clear TypeError', () => {
-        const auth = makeStubProxyAuth();
-        for (const bad of [null, 'allowHosts', 42]) {
-          expect(
-            () => new FetchCapability(auth, bad as unknown as FetchCapabilityOptions),
-          ).toThrow(new TypeError('FetchCapability options must be an object.'));
-        }
+      it.each([
+        ['null', null],
+        ['a string', 'allowHosts'],
+        ['a number', 42],
+      ])('A66: a non-object options argument (%s) throws a clear TypeError', (_, bad) => {
+        expect(
+          () => new FetchCapability(makeStubProxyAuth(), bad as unknown as FetchCapabilityOptions),
+        ).toThrow(new TypeError('FetchCapability options must be an object.'));
       });
 
       it('A66: well-formed entries are still accepted (positive control)', async () => {
-        const spy = vi.fn().mockImplementation(async () => mockOkResponse('ok'));
-        globalThis.fetch = spy;
+        const spy = okFetch();
         const auth = makeStubProxyAuth();
         expect(() => new FetchCapability(auth)).not.toThrow();
         expect(() => new FetchCapability(auth, {})).not.toThrow();
@@ -972,8 +828,10 @@ describe('FetchCapability', () => {
         expect(await guestFetch('https://example.com/')).toBe('no error');
         expect(await guestFetch('https://api.example.org/')).toBe('no error');
         expect(await guestFetch('https://x.a.b/')).toBe('no error');
+        expect(await guestFetch('http://127.0.0.1/')).toBe('no error');
+        expect(await guestFetch('http://[::1]/')).toBe('no error');
         expect(await guestFetch('https://evil.example.org/')).toContain('not allowed');
-        expect(spy).toHaveBeenCalledTimes(3);
+        expect(spy).toHaveBeenCalledTimes(5);
       });
 
       it('A66: a dotted denyHosts entry that used to deny nothing now cannot be configured', async () => {
@@ -1005,62 +863,87 @@ describe('FetchCapability', () => {
   }
 
   describe('await and promise chains on the guest response', () => {
-    it('await fetch(url) settles to a response, and await r.json() gives the data', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue(new Response('{"a":1}', { status: 200 }));
-      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
-      const val = await evalAndDrain(`
-        (async function () {
+    // Columns: name, upstream body, upstream status, guest code, value of
+    // globalThis.out after the jobs drain.
+    it.each<[string, string, number, string, unknown]>([
+      [
+        'should support .then() on response for text extraction',
+        'Hello', 200,
+        `fetch('https://example.com').then(function(r) { globalThis.out = r.text(); });`,
+        'Hello',
+      ],
+      [
+        'should support chained .then() calls',
+        'chained', 200,
+        `fetch('https://example.com')
+          .then(function(r) { return r.text(); })
+          .then(function(t) { return 'got: ' + t; })
+          .then(function(v) { globalThis.out = v; });`,
+        'got: chained',
+      ],
+      [
+        'fetch(url).then(r => r.json()).then(...) runs as a promise chain',
+        '{"n":7}', 200,
+        `fetch('https://example.com/')
+          .then(function (r) { return r.json(); })
+          .then(function (d) { globalThis.out = d.n * 2; });`,
+        14,
+      ],
+      [
+        'should support .then() with status check',
+        'ok', 201,
+        `fetch('https://example.com').then(function(r) { globalThis.out = r.status; });`,
+        201,
+      ],
+      [
+        'await fetch(url) settles to a response, and await r.json() gives the data',
+        '{"a":1}', 200,
+        `(async function () {
           var r = await fetch('https://example.com/');
           var d = await r.json();
           globalThis.out = [r.status, r.ok, d.a];
-        })();
-      `);
-      expect(val).toEqual([200, true, 1]);
-    }, 10_000);
-
-    it('await fetch(url) then await r.text() gives the body', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue(new Response('hello', { status: 200 }));
-      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
-      const val = await evalAndDrain(`
-        (async function () {
+        })();`,
+        [200, true, 1],
+      ],
+      [
+        'await fetch(url) then await r.text() gives the body',
+        'hello', 200,
+        `(async function () {
           var r = await fetch('https://example.com/');
           globalThis.out = await r.text();
-        })();
-      `);
-      expect(val).toBe('hello');
-    }, 10_000);
-
-    it('the response thenable settles to a value that is not a thenable', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue(new Response('x', { status: 202 }));
-      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
-      const val = await evalAndDrain(`
-        Promise.resolve(fetch('https://example.com/')).then(function (r) {
+        })();`,
+        'hello',
+      ],
+      [
+        'the response thenable settles to a value that is not a thenable',
+        'x', 202,
+        `Promise.resolve(fetch('https://example.com/')).then(function (r) {
           globalThis.out = [typeof r.then, r.status];
-        });
-      `);
-      expect(val).toEqual(['undefined', 202]);
-    }, 10_000);
-
-    it('fetch(url).then(r => r.json()).then(...) runs as a promise chain', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue(new Response('{"n":7}', { status: 200 }));
-      injectCap(vm, new FetchCapability(makeStubProxyAuth()));
-      const val = await evalAndDrain(`
-        fetch('https://example.com/')
+        });`,
+        ['undefined', 202],
+      ],
+      [
+        '.catch() on the response chain gets an error thrown in a callback',
+        'not json', 200,
+        `fetch('https://example.com/')
           .then(function (r) { return r.json(); })
-          .then(function (d) { globalThis.out = d.n * 2; });
-      `);
-      expect(val).toBe(14);
-    }, 10_000);
-
-    it('.catch() on the response chain gets an error thrown in a callback', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue(new Response('not json', { status: 200 }));
+          .catch(function (e) { globalThis.out = e instanceof SyntaxError; });`,
+        true,
+      ],
+      [
+        '.catch() and .finally() on the response pass the response through',
+        'pass', 203,
+        `var a = fetch('https://example.com/').catch(function () { return 'caught'; });
+        var b = fetch('https://example.com/').finally(function () { globalThis.fin = true; });
+        Promise.all([a, b]).then(function (rs) {
+          globalThis.out = [rs[0].status, rs[1].status, rs[1].text(), globalThis.fin];
+        });`,
+        [203, 203, 'pass', true],
+      ],
+    ])('%s', async (_name, body, status, code, expected) => {
+      globalThis.fetch = vi.fn().mockImplementation(async () => new Response(body, { status }));
       injectCap(vm, new FetchCapability(makeStubProxyAuth()));
-      const val = await evalAndDrain(`
-        fetch('https://example.com/')
-          .then(function (r) { return r.json(); })
-          .catch(function (e) { globalThis.out = e instanceof SyntaxError; });
-      `);
-      expect(val).toBe(true);
+      expect(await evalAndDrain(code)).toEqual(expected);
     }, 10_000);
   });
 
@@ -1137,22 +1020,22 @@ describe('FetchCapability', () => {
     it('the guest sees the size error as a fetch failure', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue(new Response('z'.repeat(50), { status: 200 }));
       injectCap(vm, new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: 10 }));
-      const msg = String(await evalAndDump(`
-        try { fetch('https://example.com/'); 'no error'; } catch (e) { e.message; }
-      `));
+      const msg = String(await guestTry(`fetch('https://example.com/'); 'no error';`));
       expect(msg).toContain('fetch failed');
       expect(msg).toContain('maxResponseBytes');
     });
 
-    it('an invalid maxResponseBytes throws a TypeError at construction', () => {
-      const auth = makeStubProxyAuth();
-      for (const bad of [0, -1, 1.5, NaN, Infinity, '100', null]) {
+    it.each([[0], [-1], [1.5], [NaN], [Infinity], ['100'], [null]])(
+      'an invalid maxResponseBytes (%o) throws a TypeError at construction',
+      (bad) => {
         expect(
-          () => new FetchCapability(auth, { maxResponseBytes: bad as unknown as number }),
-          String(bad),
-        ).toThrow(TypeError);
-      }
-      expect(() => new FetchCapability(auth, { maxResponseBytes: 1 })).not.toThrow();
+          () => new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: bad as unknown as number }),
+        ).toThrow(new TypeError('FetchCapability maxResponseBytes must be a positive integer.'));
+      },
+    );
+
+    it('a maxResponseBytes of 1 is accepted', () => {
+      expect(() => new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: 1 })).not.toThrow();
     });
 
     it('cleanup() aborts every request in flight (direct and proxy)', async () => {
@@ -1187,9 +1070,15 @@ describe('FetchCapability', () => {
       // The body never ends, and it ignores the signal. Only a cancel of
       // the reader can stop the read.
       let cancelled = false;
+      let pulls = 0;
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode('part'));
+        },
+        // The stream calls pull when the reader takes the first chunk.
+        // This pull does not add a chunk, so the next read waits.
+        pull() {
+          pulls++;
         },
         cancel() {
           cancelled = true;
@@ -1198,9 +1087,31 @@ describe('FetchCapability', () => {
       globalThis.fetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
       const cap = new FetchCapability(makeStubProxyAuth());
       const call = cap.invokeHost('fetch', ['https://example.com/']);
-      await new Promise((r) => setTimeout(r, 20));
+      // Wait until the host reads the body. Then the read is in progress.
+      await vi.waitFor(() => expect(pulls).toBeGreaterThan(0));
       cap.cleanup();
       await expect(call).rejects.toThrow(/fetch failed/);
+      expect(cancelled).toBe(true);
+    }, 10_000);
+
+    it('cleanup() before the response arrives cancels the body of a fetch that ignores the signal', async () => {
+      // The fetch function ignores the signal, and the body never ends.
+      // Without a check of the signal before the read, the read waits
+      // forever.
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+        },
+      });
+      let respond!: (r: Response) => void;
+      globalThis.fetch = vi.fn(() => new Promise<Response>((r) => (respond = r)));
+      const cap = new FetchCapability(makeStubProxyAuth());
+      const call = cap.invokeHost('fetch', ['https://example.com/']);
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+      cap.cleanup();
+      respond(new Response(body, { status: 200 }));
+      await expect(call).rejects.toThrow('fetch failed: the request was aborted.');
       expect(cancelled).toBe(true);
     }, 10_000);
   });
@@ -1210,52 +1121,32 @@ describe('FetchCapability', () => {
   // ---------------------------------------------------------------
 
   describe('proxy URL and URL resolution', () => {
-    async function proxyCallFor(base: string): Promise<string> {
+    const origin = window.location.origin;
+
+    // The token goes only to the host of the proxy base. A relative base
+    // resolves against the page.
+    it.each([
+      ['', `${origin}/proxy/fetch`],
+      ['/', `${origin}/proxy/fetch`],
+      ['//', `${origin}/proxy/fetch`],
+      ['/sub/', `${origin}/sub/proxy/fetch`],
+      ['https://proxy.example.com', 'https://proxy.example.com/proxy/fetch'],
+      ['https://proxy.example.com/', 'https://proxy.example.com/proxy/fetch'],
+      ['https://proxy.example.com//', 'https://proxy.example.com/proxy/fetch'],
+      ['https://proxy.example.com/base/', 'https://proxy.example.com/base/proxy/fetch'],
+      ['https://proxy.example.com:8443//', 'https://proxy.example.com:8443/proxy/fetch'],
+    ])('the proxy URL for base %j is joined with one slash (%s) and only it gets the token', async (base, expected) => {
       const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
       globalThis.fetch = spy;
       const cap = new FetchCapability(
         makeStubProxyAuth({ proxyBase: () => base, authHeader: () => `Bearer ${TOKEN}` }),
       );
       await cap.invokeHost('fetch', ['https://api.example.com/data']);
+
       expect(spy).toHaveBeenCalledTimes(1);
-      return String(spy.mock.calls[0][0]);
-    }
-
-    it('the proxy URL is joined with one slash', async () => {
-      const origin = window.location.origin;
-      expect(await proxyCallFor('')).toBe(`${origin}/proxy/fetch`);
-      expect(await proxyCallFor('/')).toBe(`${origin}/proxy/fetch`);
-      expect(await proxyCallFor('//')).toBe(`${origin}/proxy/fetch`);
-      expect(await proxyCallFor('/sub/')).toBe(`${origin}/sub/proxy/fetch`);
-      expect(await proxyCallFor('https://proxy.example.com')).toBe('https://proxy.example.com/proxy/fetch');
-      expect(await proxyCallFor('https://proxy.example.com/')).toBe('https://proxy.example.com/proxy/fetch');
-      expect(await proxyCallFor('https://proxy.example.com//')).toBe('https://proxy.example.com/proxy/fetch');
-      expect(await proxyCallFor('https://proxy.example.com/base/')).toBe(
-        'https://proxy.example.com/base/proxy/fetch',
-      );
-    });
-
-    it('the token goes only to the host of the proxy base', async () => {
-      const page = window.location.href;
-      const cases: [string, string][] = [
-        ['', window.location.host],
-        ['/', window.location.host],
-        ['//', window.location.host],
-        ['/sub/', window.location.host],
-        ['https://proxy.example.com/', 'proxy.example.com'],
-        ['https://proxy.example.com:8443//', 'proxy.example.com:8443'],
-      ];
-      for (const [base, host] of cases) {
-        const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
-        globalThis.fetch = spy;
-        const cap = new FetchCapability(
-          makeStubProxyAuth({ proxyBase: () => base, authHeader: () => `Bearer ${TOKEN}` }),
-        );
-        await cap.invokeHost('fetch', ['https://api.example.com/data']);
-        const [target, init] = spy.mock.calls[0];
-        expect(init.headers['X-Proxy-Authorization']).toBe(`Bearer ${TOKEN}`);
-        expect(new URL(String(target), page).host, JSON.stringify(base)).toBe(host);
-      }
+      const [target, init] = spy.mock.calls[0];
+      expect(target).toBe(expected);
+      expect(init.headers['X-Proxy-Authorization']).toBe(`Bearer ${TOKEN}`);
     });
 
     describe('with a <base> element', () => {
@@ -1310,14 +1201,13 @@ describe('FetchCapability', () => {
     it('a relative same-origin URL goes direct with the resolved absolute URL', async () => {
       const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
       globalThis.fetch = spy;
+      const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
       const cap = new FetchCapability(
-        makeStubProxyAuth({
-          proxyBase: () => 'https://proxy.example.com',
-          authHeader: () => `Bearer ${TOKEN}`,
-        }),
+        makeStubProxyAuth({ proxyBase: () => 'https://proxy.example.com', authHeader }),
       );
       await cap.invokeHost('fetch', ['/api/local']);
       expect(spy.mock.calls[0][0]).toBe(`${window.location.origin}/api/local`);
+      expect(authHeader).not.toHaveBeenCalled();
     });
   });
 }, 30000);

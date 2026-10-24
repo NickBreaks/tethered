@@ -104,11 +104,23 @@ describe('core import guard', () => {
     expect(offenders.map((f) => f.slice(srcRoot.length + 1))).toEqual([]);
   });
 
-  it('the pattern catches static, side-effect and dynamic imports', () => {
-    const specs = (text: string) => [...text.matchAll(IMPORT_SPECIFIER)].map(([, s]) => s);
-    expect(specs(`import { a } from 'pkg';`)).toEqual(['pkg']);
-    expect(specs(`import 'pkg';`)).toEqual(['pkg']);
-    expect(specs(`await import("pkg")`)).toEqual(['pkg']);
-    expect(specs(`// mentions pkg in prose`)).toEqual([]);
+  it.each([
+    ['a static import', `import { a } from 'pkg';`, ['pkg']],
+    ['a side-effect import', `import 'pkg';`, ['pkg']],
+    ['a dynamic import', `await import("pkg")`, ['pkg']],
+    ['a re-export', `export * from './x.js';`, ['./x.js']],
+    ['a type-only import', `import type { T } from 'pkg';`, ['pkg']],
+    ['prose that names a package', `// mentions pkg in prose`, []],
+  ])('the import pattern finds the specifiers of %s', (_name, text, expected) => {
+    expect([...text.matchAll(IMPORT_SPECIFIER)].map(([, s]) => s)).toEqual(expected);
+  });
+
+  it.each([
+    ['new Worker(', `new Worker(url)`, true],
+    ['new SharedWorker(', `new SharedWorker(url)`, true],
+    ['new URL with import.meta.url', `new URL('./w.js', import.meta.url)`, true],
+    ['new URL without import.meta.url', `new URL('https://example.com/')`, false],
+  ])('the worker pattern checks %s', (_name, text, expected) => {
+    expect(WORKER_URL.test(text)).toBe(expected);
   });
 });

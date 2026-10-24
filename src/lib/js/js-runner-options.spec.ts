@@ -207,9 +207,13 @@ describe('JsRunner run lifecycle', () => {
       const p1 = runner.execute('a()');
       const p2 = runner.execute('b()', { timeoutMs: 10_000 });
       expect((await p1).error).toBe(SUPERSEDED);
-      // Past a's backstop (100 + 2000 ms): nothing fires, b is still running.
       await state(Promise.resolve());
       expect(workers).toHaveLength(2);
+      expect(workers[1].runs.map((r) => r.code)).toEqual(['b()']);
+      // Only the backstop of b stays armed. The kill of an old backstop has
+      // a runId guard, so only the timer count shows a leaked timer.
+      expect(vi.getTimerCount()).toBe(1);
+      // Past the backstop of a (100 + 2000 ms): nothing fires, b still runs.
       vi.advanceTimersByTime(5000);
       expect(await state(p2)).toBe('pending');
       expect(workers[1].terminate).not.toHaveBeenCalled();
@@ -531,14 +535,6 @@ describe('JsRunner run lifecycle', () => {
         await pB;
       });
     });
-
-    it('keeps the default timeout and an empty tag when no options are passed', async () => {
-      await build({ timeoutMs: 1234 });
-      void runner.execute('x');
-      await settle();
-      expect(current().runs[0].timeoutMs).toBe(1234);
-      expect(runner.activeTag.get()).toBe('');
-    });
   });
 
   describe('time limit validation', () => {
@@ -660,25 +656,36 @@ describe('JsRunner run lifecycle', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const p1 = runner.execute('stuck()', { timeoutMs: 10 });
       const p2 = runner.execute('next()');
-      await Promise.resolve();
-      await Promise.resolve();
+      await state(Promise.resolve());
       vi.advanceTimersByTime(10 + 2000);
       const r1 = await p1;
       expect(r1.timedOut).toBe(true);
       vi.useRealTimers();
       await settle();
-      current().done(current().runs[0].runId);
+      // The stuck worker is replaced, and the next run goes to the new one.
+      expect(workers).toHaveLength(2);
+      expect(workers[0].terminate).toHaveBeenCalledOnce();
+      expect(workers[0].runs.map((r) => r.code)).toEqual(['stuck()']);
+      expect(workers[1].runs.map((r) => r.code)).toEqual(['next()']);
+      workers[1].done(workers[1].runs[0].runId);
       expect((await p2).success).toBe(true);
     });
   });
 
   describe('per-run options', () => {
+    it('keeps the default timeout and an empty tag when no options are passed', async () => {
+      await build({ timeoutMs: 1234 });
+      void runner.execute('x');
+      await settle();
+      expect(current().runs[0].timeoutMs).toBe(1234);
+      expect(runner.activeTag.get()).toBe('');
+    });
+
     it('timeoutMs overrides the default for that run only (worker deadline and backstop)', async () => {
       await build({ timeoutMs: 5000 });
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const p = runner.execute('stuck()', { timeoutMs: 50 });
-      await Promise.resolve();
-      await Promise.resolve();
+      await state(Promise.resolve());
       expect(current().runs[0].timeoutMs).toBe(50);
       vi.advanceTimersByTime(50 + 1999);
       expect(await state(p)).toBe('pending');
@@ -767,8 +774,7 @@ describe('JsRunner run lifecycle', () => {
     it('fires null on a backstop timeout', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const p = runner.execute('stuck()');
-      await Promise.resolve();
-      await Promise.resolve();
+      await state(Promise.resolve());
       expect(events).toEqual([{ tag: '', startTime: expect.any(Number), timeoutMs: 300 }]);
       vi.advanceTimersByTime(300 + 2000);
       await p;
@@ -846,7 +852,7 @@ describe('JsRunner run lifecycle', () => {
   describe('recycleAfterRuns', () => {
     it('is off by default', async () => {
       await build();
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 10; i++) {
         const p = runner.execute(`run${i}`);
         await settle();
         current().done(current().runs[i].runId);
@@ -945,21 +951,34 @@ describe('JsRunner run lifecycle', () => {
       expect(workers[2].runs).toEqual([]);
     });
 
-    it('leaves ordinary errors and timeouts alone', async () => {
+    it.each<[string, NonNullable<Parameters<FakeJsWorker['done']>[1]>]>([
+      ['an ordinary error', { success: false, error: 'TypeError: nope' }],
+      ['a timeout', { success: false, timedOut: true, error: 'InternalError: interrupted' }],
+      ['exhausted on a successful run', { success: true, exhausted: true }],
+      [
+        'exhausted on a timed-out run',
+        {
+          success: false,
+          timedOut: true,
+          error: 'Execution timed out: script exceeded the time limit.',
+          exhausted: true,
+        },
+      ],
+    ])('does not respawn or retry on %s', async (_, extra) => {
       await build();
-      const p1 = runner.execute('bad()');
+      const reasons: string[] = [];
+      runner.onRecycle((r) => reasons.push(r));
+      const p = runner.execute('x()');
       await settle();
-      current().done(current().runs[0].runId, { success: false, error: 'TypeError: nope' });
-      expect((await p1).error).toBe('TypeError: nope');
-      const p2 = runner.execute('loop()');
+      current().done(current().runs[0].runId, extra);
+      const result = await p;
+      expect(result.success).toBe(extra.success);
+      expect(result.timedOut).toBe(extra.timedOut ?? false);
+      expect(result.error).toBe(extra.error);
       await settle();
-      current().done(current().runs[1].runId, {
-        success: false,
-        timedOut: true,
-        error: 'InternalError: interrupted',
-      });
-      expect((await p2).timedOut).toBe(true);
+      expect(reasons).toEqual([]);
       expect(workers).toHaveLength(1);
+      expect(workers[0].runs).toHaveLength(1);
     });
 
     it.each([
@@ -979,24 +998,6 @@ describe('JsRunner run lifecycle', () => {
       expect(reasons).toEqual([]);
       expect(workers).toHaveLength(1);
       expect(workers[0].runs).toHaveLength(1);
-    });
-
-    it('ignores exhausted on a successful or timed-out run', async () => {
-      await build();
-      const p1 = runner.execute('ok()');
-      await settle();
-      current().done(current().runs[0].runId, { exhausted: true });
-      expect((await p1).success).toBe(true);
-      const p2 = runner.execute('loop()');
-      await settle();
-      current().done(current().runs[1].runId, {
-        success: false,
-        timedOut: true,
-        error: 'Execution timed out: script exceeded the time limit.',
-        exhausted: true,
-      });
-      expect((await p2).timedOut).toBe(true);
-      expect(workers).toHaveLength(1);
     });
 
     it('can be disabled with recoverExhaustion: false', async () => {
@@ -1113,6 +1114,7 @@ describe('JsRunner worker message validation', () => {
       await build(false);
       const init = runner.initialize();
       current().simulateRaw({ type: 'pwn' });
+      expect(await state(init)).toBe('pending');
       current().simulate({ type: 'ready' });
       await init;
       expect(runner.ready.get()).toBe(true);
@@ -1319,6 +1321,24 @@ describe('JsRunner worker message validation', () => {
 
     const capResults = () => current().posts.filter((m) => m.type === 'cap-result');
 
+    /** Runs `body` with a spy on the process `unhandledRejection` event, then removes the spy. */
+    async function withUnhandledSpy(
+      body: (unhandled: ReturnType<typeof vi.fn>) => Promise<void>,
+    ): Promise<void> {
+      const unhandled = vi.fn();
+      const proc = (
+        globalThis as {
+          process?: { on(e: string, fn: () => void): void; off(e: string, fn: () => void): void };
+        }
+      ).process;
+      proc?.on('unhandledRejection', unhandled);
+      try {
+        await body(unhandled);
+      } finally {
+        proc?.off('unhandledRejection', unhandled);
+      }
+    }
+
     const capCall = (runId: number, callId: number, capability: string, method: string) => ({
       type: 'cap-call' as const,
       callId,
@@ -1371,14 +1391,7 @@ describe('JsRunner worker message validation', () => {
     it('A67: an un-cloneable host result is answered with an error cap-result', async () => {
       await build();
       const { p, runId } = await start();
-      const unhandled = vi.fn();
-      const proc = (
-        globalThis as {
-          process?: { on(e: string, fn: () => void): void; off(e: string, fn: () => void): void };
-        }
-      ).process;
-      proc?.on('unhandledRejection', unhandled);
-      try {
+      await withUnhandledSpy(async (unhandled) => {
         current().postMessage.mockImplementationOnce(() => {
           throw new DOMException('() => 1 could not be cloned.', 'DataCloneError');
         });
@@ -1394,9 +1407,7 @@ describe('JsRunner worker message validation', () => {
           },
         ]);
         expect(unhandled).not.toHaveBeenCalled();
-      } finally {
-        proc?.off('unhandledRejection', unhandled);
-      }
+      });
       current().done(runId);
       expect((await p).success).toBe(true);
     });
@@ -1404,14 +1415,7 @@ describe('JsRunner worker message validation', () => {
     it('A67: a fallback error reply that also throws is not an unhandled rejection', async () => {
       await build();
       const { p, runId } = await start();
-      const unhandled = vi.fn();
-      const proc = (
-        globalThis as {
-          process?: { on(e: string, fn: () => void): void; off(e: string, fn: () => void): void };
-        }
-      ).process;
-      proc?.on('unhandledRejection', unhandled);
-      try {
+      await withUnhandledSpy(async (unhandled) => {
         // Both the result and the error reply fail to post.
         current().postMessage.mockImplementation(() => {
           throw new DOMException('the port is closed', 'InvalidStateError');
@@ -1421,9 +1425,7 @@ describe('JsRunner worker message validation', () => {
         await settle();
         expect(current().postMessage).toHaveBeenCalledTimes(3); // run, result, error reply
         expect(unhandled).not.toHaveBeenCalled();
-      } finally {
-        proc?.off('unhandledRejection', unhandled);
-      }
+      });
       current().done(runId);
       expect((await p).success).toBe(true);
     });
@@ -1536,6 +1538,9 @@ describe('JsRunner boot timeout', () => {
     readyOnBoot.push(true);
     build({ bootTimeoutMs: 1000 });
     await runner.initialize();
+    // A late boot timer has no visible effect on a settled boot. Thus
+    // only the timer count shows that the timer was cleared.
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(5000);
     expect(runner.ready.get()).toBe(true);
     expect(runner.initError.get()).toBeNull();

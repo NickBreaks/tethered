@@ -54,8 +54,9 @@ describe('default JS worker factory', () => {
     ])('A31: %s spawns a real module Worker', (_, factory) => {
       const worker = factory() as unknown as StubWorker;
       expect(worker).toBeInstanceOf(StubWorker);
-      // The bundler rewrites the ./js-worker URL to its emitted chunk.
-      expect(String(worker.url)).toMatch(/worker/);
+      // The URL points at the worker entry. Vite rewrites it to the
+      // source file (js-worker.ts). The build keeps js-worker.js.
+      expect(String(worker.url)).toMatch(/\/js-worker\.(js|ts)(\?|$)/);
       expect(worker.options).toEqual({ type: 'module' });
     });
   });

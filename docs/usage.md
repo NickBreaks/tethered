@@ -124,7 +124,8 @@ rt.registry.setEnabled('fetch', true);
 - **disk**: by default, a virtual file system in IndexedDB. You can give a
   `MapDiskBackend` or your own `DiskBackend`. Paths are absolute keys.
   The capability resolves `.` and `..` (`normalizePath`), and `..` never
-  goes above `/`.
+  goes above `/`. `IndexedDBDiskBackend` keeps one connection open. Call
+  its `close()` to release it.
 - **timer**: guest timers run on virtual time inside the worker. The
   clock starts at 0 for each run, and moves forward to the next due
   timer. No real time passes. The worker drains the timers before the

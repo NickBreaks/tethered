@@ -10,18 +10,8 @@ import { playwright } from '@vitest/browser-playwright';
  * Run with:  npm run test:integration
  */
 export default defineConfig({
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
   test: {
-    include: [
-      'src/**/*.integration.spec.ts',
-      // Needs a real IndexedDB; skipped under jsdom.
-      'src/lib/capabilities/sandbox-disk-db.spec.ts',
-    ],
+    include: ['src/**/*.integration.spec.ts'],
     globals: true,
     testTimeout: 120_000,
     hookTimeout: 120_000,

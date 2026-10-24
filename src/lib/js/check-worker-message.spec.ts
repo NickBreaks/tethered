@@ -1,17 +1,28 @@
 import { checkWorkerMessage } from './check-worker-message.js';
 
 describe('checkWorkerMessage', () => {
-  it('A28: rejects anything that is not a plain object with a known type', () => {
-    for (const data of [null, undefined, 'ready', 1, true, [], [{ type: 'ready' }], {}]) {
-      expect(checkWorkerMessage(data).ok).toBe(false);
-    }
+  it.each([
+    ['null', null, 'not an object'],
+    ['undefined', undefined, 'not an object'],
+    ['a string', 'ready', 'not an object'],
+    ['a number', 1, 'not an object'],
+    ['a boolean', true, 'not an object'],
+    ['an empty array', [], 'not an object'],
+    ['an array that holds a message', [{ type: 'ready' }], 'not an object'],
+    ['an object without type', {}, 'unknown message type'],
+  ])('A28: rejects %s', (_name, data, reason) => {
+    expect(checkWorkerMessage(data)).toStrictEqual({ ok: false, reason });
   });
 
-  it('A24: rejects unknown types, including inherited property names', () => {
-    for (const type of ['pwn', 'toString', '__proto__', 42, null]) {
-      expect(checkWorkerMessage({ type }).ok).toBe(false);
-    }
-  });
+  it.each(['pwn', 'toString', '__proto__', 42, null])(
+    'A24: rejects the unknown type %j, including inherited property names',
+    (type) => {
+      expect(checkWorkerMessage({ type })).toStrictEqual({
+        ok: false,
+        reason: 'unknown message type',
+      });
+    },
+  );
 
   it('never throws, even on a hostile getter', () => {
     const hostile = Object.defineProperty({}, 'type', {
@@ -19,116 +30,145 @@ describe('checkWorkerMessage', () => {
         throw new Error('boom');
       },
     });
-    expect(checkWorkerMessage(hostile)).toEqual({ ok: false, reason: 'unreadable message' });
+    expect(checkWorkerMessage(hostile)).toStrictEqual({ ok: false, reason: 'unreadable message' });
   });
 
-  it('accepts well-formed messages and rebuilds them from known fields only', () => {
-    expect(checkWorkerMessage({ type: 'ready', extra: 1 })).toEqual({
-      ok: true,
-      msg: { type: 'ready' },
-    });
-    expect(checkWorkerMessage({ type: 'init-error', message: 'no wasm' })).toEqual({
-      ok: true,
-      msg: { type: 'init-error', message: 'no wasm' },
-    });
-    expect(
-      checkWorkerMessage({
+  // toStrictEqual also fails on a key with the value undefined. Thus each
+  // row shows that the rebuilt message has only the known fields.
+  it.each([
+    ['ready', { type: 'ready', extra: 1 }, { type: 'ready' }],
+    [
+      'init-error',
+      { type: 'init-error', message: 'no wasm', extra: 1 },
+      { type: 'init-error', message: 'no wasm' },
+    ],
+    [
+      'output',
+      {
         type: 'output',
         runId: 1,
         entry: { type: 'log', content: 'hi', timestamp: 2, html: '<b>' },
-      }),
-    ).toStrictEqual({
-      ok: true,
-      msg: { type: 'output', runId: 1, entry: { type: 'log', content: 'hi', timestamp: 2 } },
-    });
-    expect(
-      checkWorkerMessage({
-        type: 'cap-call',
-        callId: 3,
-        runId: 1,
-        capability: 'fetch',
-        method: 'request',
-        args: ['u'],
-      }),
-    ).toEqual({
-      ok: true,
-      msg: {
-        type: 'cap-call',
-        callId: 3,
-        runId: 1,
-        capability: 'fetch',
-        method: 'request',
-        args: ['u'],
+        extra: 1,
       },
-    });
-    expect(
-      checkWorkerMessage({ type: 'done', runId: 1, success: false, timedOut: false, error: 'E' }),
-    ).toEqual({
-      ok: true,
-      msg: { type: 'done', runId: 1, success: false, timedOut: false, error: 'E' },
-    });
+      { type: 'output', runId: 1, entry: { type: 'log', content: 'hi', timestamp: 2 } },
+    ],
+    [
+      'cap-call',
+      {
+        type: 'cap-call',
+        callId: 3,
+        runId: 1,
+        capability: 'fetch',
+        method: 'request',
+        args: ['u'],
+        extra: 1,
+      },
+      { type: 'cap-call', callId: 3, runId: 1, capability: 'fetch', method: 'request', args: ['u'] },
+    ],
+    [
+      'done',
+      { type: 'done', runId: 1, success: false, timedOut: false, error: 'E', extra: 1 },
+      { type: 'done', runId: 1, success: false, timedOut: false, error: 'E' },
+    ],
+    [
+      'done without error',
+      { type: 'done', runId: 1, success: true, timedOut: false },
+      { type: 'done', runId: 1, success: true, timedOut: false },
+    ],
+  ])('accepts a well-formed %s message and rebuilds it from known fields only', (_name, data, msg) => {
+    expect(checkWorkerMessage(data)).toStrictEqual({ ok: true, msg });
   });
 
   it('rejects a non-string init-error message', () => {
-    expect(checkWorkerMessage({ type: 'init-error', message: 42 }).ok).toBe(false);
+    expect(checkWorkerMessage({ type: 'init-error', message: 42 })).toStrictEqual({
+      ok: false,
+      reason: 'malformed init-error',
+    });
   });
 
-  it('A25: rejects output with a missing, unknown-type or non-string-content entry', () => {
-    for (const entry of [
-      undefined,
-      { content: 'x', timestamp: 1 },
-      { type: 'shout', content: 'x', timestamp: 1 },
-      { type: 'log', content: 1, timestamp: 1 },
-      { type: 'log', content: 'x' },
-    ]) {
-      expect(checkWorkerMessage({ type: 'output', runId: 1, entry }).ok).toBe(false);
-    }
+  it.each([
+    ['a missing entry', undefined],
+    ['an entry that is not an object', 'log'],
+    ['an entry without type', { content: 'x', timestamp: 1 }],
+    ['an entry with an unknown type', { type: 'shout', content: 'x', timestamp: 1 }],
+    ['an entry with non-string content', { type: 'log', content: 1, timestamp: 1 }],
+    ['an entry without timestamp', { type: 'log', content: 'x' }],
+  ])('A25: rejects output with %s', (_name, entry) => {
+    expect(checkWorkerMessage({ type: 'output', runId: 1, entry })).toStrictEqual({
+      ok: false,
+      reason: 'malformed output',
+    });
   });
 
-  it('A26: a malformed cap-call carries callId and runId when both are usable', () => {
+  it('rejects output with a runId that is not a number', () => {
+    const entry = { type: 'log', content: 'x', timestamp: 1 };
+    expect(checkWorkerMessage({ type: 'output', runId: '1', entry })).toStrictEqual({
+      ok: false,
+      reason: 'malformed output',
+    });
+  });
+
+  describe('A26: a malformed cap-call carries callId and runId when both are usable', () => {
     const base = { type: 'cap-call', callId: 7, runId: 2, capability: 'c', method: 'm', args: [] };
-    expect(checkWorkerMessage({ ...base, args: 'x' })).toEqual({
-      ok: false,
-      reason: 'malformed cap-call: args is not an array',
-      capCall: { callId: 7, runId: 2 },
+
+    it.each([
+      ['args is not an array', { args: 'x' }],
+      ['method is not a string', { method: 1 }],
+      ['capability is not a string', { capability: undefined }],
+    ])('A26: %s: the rejection carries the ids', (problem, change) => {
+      expect(checkWorkerMessage({ ...base, ...change })).toStrictEqual({
+        ok: false,
+        reason: `malformed cap-call: ${problem}`,
+        capCall: { callId: 7, runId: 2 },
+      });
     });
-    expect(checkWorkerMessage({ ...base, method: 1 })).toMatchObject({
-      ok: false,
-      capCall: { callId: 7, runId: 2 },
+
+    it.each([
+      // The first problem is the reason, also when there is more than one.
+      ['callId is not a number', { callId: '7', args: 'x' }],
+      ['runId is not a number', { runId: null }],
+      ['runId is not a number', { runId: Number.NaN, method: 1 }],
+    ])('A26: %s: the rejection has no ids (%j)', (problem, change) => {
+      expect(checkWorkerMessage({ ...base, ...change })).toStrictEqual({
+        ok: false,
+        reason: `malformed cap-call: ${problem}`,
+      });
     });
-    expect(checkWorkerMessage({ ...base, callId: '7', args: 'x' })).toEqual({
-      ok: false,
-      reason: 'malformed cap-call: callId is not a number',
-    });
-    expect(checkWorkerMessage({ ...base, runId: null })).not.toHaveProperty('capCall');
   });
 
-  it('A27: rejects done with a non-boolean success or timedOut, or a non-string error', () => {
+  describe('done', () => {
     const base = { type: 'done', runId: 1, success: true, timedOut: false };
-    expect(checkWorkerMessage(base).ok).toBe(true);
-    expect(checkWorkerMessage({ ...base, success: 'true' }).ok).toBe(false);
-    expect(checkWorkerMessage({ ...base, timedOut: undefined }).ok).toBe(false);
-    expect(checkWorkerMessage({ ...base, error: 5 }).ok).toBe(false);
-    expect(checkWorkerMessage({ ...base, runId: '1' }).ok).toBe(false);
-  });
 
-  it('accepts done with a boolean exhausted flag and keeps it', () => {
-    const base = { type: 'done', runId: 1, success: false, timedOut: false, error: 'E' };
-    expect(checkWorkerMessage({ ...base, exhausted: true, extra: 1 })).toEqual({
-      ok: true,
-      msg: { ...base, exhausted: true },
+    it('A27: accepts done with boolean success and timedOut', () => {
+      expect(checkWorkerMessage(base)).toStrictEqual({ ok: true, msg: base });
     });
-    expect(checkWorkerMessage({ ...base, exhausted: false })).toEqual({
-      ok: true,
-      msg: { ...base, exhausted: false },
-    });
-    expect(checkWorkerMessage(base)).toEqual({ ok: true, msg: base });
-  });
 
-  it('rejects done with a non-boolean exhausted flag', () => {
-    const base = { type: 'done', runId: 1, success: false, timedOut: false };
-    for (const exhausted of ['true', 1, null, {}]) {
-      expect(checkWorkerMessage({ ...base, exhausted }).ok).toBe(false);
-    }
+    it.each([
+      ['a non-boolean success', { success: 'true' }],
+      ['a missing timedOut', { timedOut: undefined }],
+      ['a non-string error', { error: 5 }],
+      ['a string runId', { runId: '1' }],
+      ['an infinite runId', { runId: Infinity }],
+    ])('A27: rejects done with %s', (_name, change) => {
+      expect(checkWorkerMessage({ ...base, ...change })).toStrictEqual({
+        ok: false,
+        reason: 'malformed done',
+      });
+    });
+
+    it.each([true, false])('accepts done with exhausted: %s and keeps it', (exhausted) => {
+      const failed = { ...base, success: false, error: 'E' };
+      expect(checkWorkerMessage({ ...failed, exhausted, extra: 1 })).toStrictEqual({
+        ok: true,
+        msg: { ...failed, exhausted },
+      });
+    });
+
+    it.each(['true', 1, null, {}])('rejects done with the non-boolean exhausted flag %j', (exhausted) => {
+      expect(checkWorkerMessage({ ...base, exhausted })).toStrictEqual({
+        ok: false,
+        reason: 'malformed done',
+      });
+    });
   });
 });

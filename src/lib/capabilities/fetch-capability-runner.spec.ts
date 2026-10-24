@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { createJsWorkerFactory } from '../../workers/index.js';
 import { JsRunner } from '../js/js-runner.js';
 import { CapabilityStore } from './capability-store.js';
@@ -45,12 +45,15 @@ describe('FetchCapability through JsRunner', () => {
     runner.dispose();
   });
 
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
   afterEach(() => {
-    if (originalFetch) globalThis.fetch = originalFetch;
+    globalThis.fetch = originalFetch;
   });
 
   function mockFetch(impl: (url: string, init: RequestInit) => Promise<Response>): void {
-    originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockImplementation(impl);
   }
 
@@ -79,6 +82,7 @@ describe('FetchCapability through JsRunner', () => {
       { timeoutMs: 3000 },
     );
     expect(result.success).toBe(true);
+    expect(result.timedOut).toBe(false);
     expect(logs(result)).toEqual(['sync 200 hello', 'then hello']);
   }, 15_000);
 

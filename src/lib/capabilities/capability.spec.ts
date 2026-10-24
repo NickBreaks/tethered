@@ -14,29 +14,18 @@ const stubProxyAuth = {
 } as unknown as ProxyAuth;
 
 describe('SandboxCapability', () => {
+  // `npm run typecheck` enforces this test. Vitest does not.
   it('A22: has no inject member', () => {
-    const cap: SandboxCapability = {
-      name: 'probe',
-      description: 'probe',
-      stubInfo: { name: 'probe', type: 'function' },
-      // @ts-expect-error A22: inject is not part of SandboxCapability
-      inject: () => {},
-    };
-    type HasInject = 'inject' extends keyof SandboxCapability ? true : false;
-    const hasInject: HasInject = false;
-    expect(hasInject).toBe(false);
-    expect(cap.name).toBe('probe');
+    expectTypeOf<SandboxCapability>().not.toHaveProperty('inject');
   });
 
-  it('A22: no built-in capability carries an inject method', () => {
-    const caps: SandboxCapability[] = [
-      new StorageCapability(new MapStorageBackend()),
-      new DiskCapability(new MapDiskBackend()),
-      new FetchCapability(stubProxyAuth),
-      new TimerCapability(),
-    ];
-    for (const cap of caps) {
-      expect('inject' in cap, cap.name).toBe(false);
-    }
+  it.each<[string, () => SandboxCapability]>([
+    ['StorageCapability', () => new StorageCapability(new MapStorageBackend())],
+    ['DiskCapability', () => new DiskCapability(new MapDiskBackend())],
+    ['FetchCapability', () => new FetchCapability(stubProxyAuth)],
+    ['TimerCapability', () => new TimerCapability()],
+  ])('A22: no built-in capability carries an inject method (%s)', (_name, make) => {
+    const cap = make();
+    expect('inject' in cap, cap.name).toBe(false);
   });
 });

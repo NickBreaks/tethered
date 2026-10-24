@@ -18,26 +18,26 @@
     <main>
       <section class="editor">
         <label for="code">Guest code</label>
-        <div class="examples" id="examples" data-testid="examples"></div>
-        <textarea id="code" data-testid="code" spellcheck="false" rows="14"></textarea>
+        <div class="examples" id="examples"></div>
+        <textarea id="code" spellcheck="false" rows="14"></textarea>
         <div class="actions">
-          <button id="run" data-testid="run" type="button" disabled>Run</button>
-          <button id="stop" data-testid="stop" type="button" disabled>Stop</button>
-          <span id="status" data-testid="status" role="status">Starting the worker...</span>
+          <button id="run" type="button" disabled>Run</button>
+          <button id="stop" type="button" disabled>Stop</button>
+          <span id="status" role="status">Starting the worker...</span>
         </div>
       </section>
 
       <section class="settings">
         <fieldset>
           <legend>Capabilities</legend>
-          <label><input type="checkbox" id="cap-fetch" data-testid="cap-fetch" checked /> fetch</label>
-          <label><input type="checkbox" id="cap-storage" data-testid="cap-storage" /> storage</label>
-          <label><input type="checkbox" id="cap-disk" data-testid="cap-disk" /> disk</label>
-          <label><input type="checkbox" id="cap-timer" data-testid="cap-timer" checked /> timer</label>
+          <label><input type="checkbox" id="cap-fetch" checked /> fetch</label>
+          <label><input type="checkbox" id="cap-storage" /> storage</label>
+          <label><input type="checkbox" id="cap-disk" /> disk</label>
+          <label><input type="checkbox" id="cap-timer" checked /> timer</label>
         </fieldset>
         <fieldset>
           <legend>Fetch allowlist</legend>
-          <input id="allow-hosts" data-testid="allow-hosts" type="text" />
+          <input id="allow-hosts" type="text" />
           <small>Comma-separated hosts; <code>*.example.com</code> matches subdomains. Applied on the next run.</small>
           <small>
             The guest can also fetch the files of this demo (<code id="demo-dir"></code>) on this
@@ -48,7 +48,7 @@
 
       <section class="output">
         <h2>Output</h2>
-        <ol id="output" data-testid="output" aria-live="polite"></ol>
+        <ol id="output" aria-live="polite"></ol>
       </section>
     </main>
 

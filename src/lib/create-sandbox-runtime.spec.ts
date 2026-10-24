@@ -1,5 +1,9 @@
 import { vi } from 'vitest';
-import { createSandboxRuntime } from './create-sandbox-runtime.js';
+import {
+  createSandboxRuntime,
+  type SandboxRuntime,
+  type SandboxRuntimeOptions,
+} from './create-sandbox-runtime.js';
 import type { JsMainToWorkerMsg, JsWorkerToMainMsg } from './js/worker-protocol.js';
 import type { CodeRunner } from './shared/code-runner.js';
 import { createValue } from './shared/readable-value.js';
@@ -39,24 +43,51 @@ describe('createSandboxRuntime', () => {
   let jsWorker: FakeJsWorker;
   let jsWorkerFactory: ReturnType<typeof vi.fn<() => Worker>>;
 
+  // Every runtime that a test builds. afterEach disposes them, also when a
+  // test fails before its own dispose() call.
+  let created: SandboxRuntime[];
+
   beforeEach(() => {
     jsWorker = new FakeJsWorker();
     jsWorkerFactory = vi.fn(() => jsWorker as unknown as Worker);
+    created = [];
   });
 
+  afterEach(() => {
+    for (const rt of created) rt.dispose();
+    vi.useRealTimers();
+  });
+
+  function create(options: SandboxRuntimeOptions): SandboxRuntime {
+    const rt = createSandboxRuntime(options);
+    created.push(rt);
+    return rt;
+  }
+
   function build() {
-    return createSandboxRuntime({
+    return create({
       corsProxyUrl: '',
       jsWorkerFactory,
       timeoutMs: 1234,
     });
   }
 
+  /** Makes the factory return a new fake worker for each spawn. */
+  function spawnEach(): FakeJsWorker[] {
+    const spawned: FakeJsWorker[] = [];
+    jsWorkerFactory.mockImplementation(() => {
+      const w = new FakeJsWorker();
+      spawned.push(w);
+      return w as unknown as Worker;
+    });
+    return spawned;
+  }
+
   it('passes corsProxyUrl to the shared auth and starts the facade in js mode', () => {
     const rt = build();
     expect(rt.auth.proxyBase()).toBe('');
     expect(rt.facade.mode.get()).toBe('js');
-    const remote = createSandboxRuntime({ jsWorkerFactory, corsProxyUrl: 'https://proxy.example' });
+    const remote = create({ jsWorkerFactory, corsProxyUrl: 'https://proxy.example' });
     expect(remote.auth.proxyBase()).toBe('https://proxy.example');
     expect(remote.auth).not.toBe(rt.auth);
   });
@@ -71,7 +102,7 @@ describe('createSandboxRuntime', () => {
 
   it('A15: extra runners are registered under their keys and reachable via setMode', async () => {
     const foo = fakeRunner();
-    const rt = createSandboxRuntime({ jsWorkerFactory, runners: { foo } });
+    const rt = create({ jsWorkerFactory, runners: { foo } });
     expect(rt.facade.modes).toEqual(['js', 'foo']);
     expect(rt.facade.runner('foo')).toBe(foo);
     rt.facade.setMode('foo');
@@ -84,18 +115,18 @@ describe('createSandboxRuntime', () => {
 
   it('A15: an extra runner may start as the initial mode', () => {
     const foo = fakeRunner();
-    const rt = createSandboxRuntime({ jsWorkerFactory, runners: { foo }, initialMode: 'foo' });
+    const rt = create({ jsWorkerFactory, runners: { foo }, initialMode: 'foo' });
     expect(rt.facade.mode.get()).toBe('foo');
   });
 
   it('A15: an extra runner cannot replace the built-in js runner', () => {
-    expect(() => createSandboxRuntime({ jsWorkerFactory, runners: { js: fakeRunner() } })).toThrow(
+    expect(() => create({ jsWorkerFactory, runners: { js: fakeRunner() } })).toThrow(
       /"js"/,
     );
   });
 
   it('passes the jsConcurrency option to the JS runner', async () => {
-    const rt = createSandboxRuntime({ jsWorkerFactory, jsConcurrency: 'queue' });
+    const rt = create({ jsWorkerFactory, jsConcurrency: 'queue' });
     const booted = rt.js.initialize();
     jsWorker.simulate({ type: 'ready' });
     await booted;
@@ -110,7 +141,7 @@ describe('createSandboxRuntime', () => {
   it('passes the jsBootTimeoutMs option to the JS runner', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      const rt = createSandboxRuntime({ jsWorkerFactory, jsBootTimeoutMs: 50 });
+      const rt = create({ jsWorkerFactory, jsBootTimeoutMs: 50 });
       const booted = rt.js.initialize();
       vi.advanceTimersByTime(50);
       await expect(booted).rejects.toThrow('JS worker did not become ready within 50 ms.');
@@ -123,13 +154,8 @@ describe('createSandboxRuntime', () => {
 
   it('facade shows only the newest result when a JS run is superseded', async () => {
     // A supersede replaces the worker, so each new worker gets its own fake.
-    const spawned: FakeJsWorker[] = [];
-    jsWorkerFactory.mockImplementation(() => {
-      const w = new FakeJsWorker();
-      spawned.push(w);
-      return w as unknown as Worker;
-    });
-    const rt = createSandboxRuntime({ jsWorkerFactory });
+    const spawned = spawnEach();
+    const rt = create({ jsWorkerFactory });
     const booted = rt.js.initialize();
     spawned[0].simulate({ type: 'ready' });
     await booted;
@@ -162,14 +188,58 @@ describe('createSandboxRuntime', () => {
     expect(jsWorkerFactory).not.toHaveBeenCalled();
   });
 
-  it('throws a RangeError for a timeoutMs or jsBootTimeoutMs that is not a usable time limit', () => {
-    for (const bad of [Infinity, NaN, 0, -5, 2 ** 31]) {
-      expect(() => createSandboxRuntime({ jsWorkerFactory, timeoutMs: bad })).toThrow(RangeError);
-      expect(() => createSandboxRuntime({ jsWorkerFactory, jsBootTimeoutMs: bad })).toThrow(
-        RangeError,
-      );
-    }
-    expect(jsWorkerFactory).not.toHaveBeenCalled();
+  it.each([Infinity, NaN, 0, -5, 2 ** 31])(
+    'throws a RangeError for a timeoutMs or jsBootTimeoutMs that is not a usable time limit: %d',
+    (bad) => {
+      expect(() => create({ jsWorkerFactory, timeoutMs: bad })).toThrow(RangeError);
+      expect(() => create({ jsWorkerFactory, jsBootTimeoutMs: bad })).toThrow(RangeError);
+      expect(jsWorkerFactory).not.toHaveBeenCalled();
+    },
+  );
+
+  it('passes the jsRecycleAfterRuns option to the JS runner', async () => {
+    const spawned = spawnEach();
+    const rt = create({ jsWorkerFactory, jsRecycleAfterRuns: 1 });
+    const onRecycle = vi.fn();
+    rt.js.onRecycle(onRecycle);
+    const booted = rt.js.initialize();
+    spawned[0].simulate({ type: 'ready' });
+    await booted;
+    const p1 = rt.js.execute('one');
+    await flush();
+    const [run1] = spawned[0].posted.filter((m) => m.type === 'run');
+    spawned[0].simulate({ type: 'done', runId: run1.runId, success: true, timedOut: false });
+    await p1;
+    expect(onRecycle).not.toHaveBeenCalled();
+
+    void rt.js.execute('two');
+    await flush();
+    expect(onRecycle).toHaveBeenCalledExactlyOnceWith('periodic');
+    expect(spawned).toHaveLength(2);
+    expect(spawned[0].terminate).toHaveBeenCalled();
+  });
+
+  it('passes the jsRecoverExhaustion option to the JS runner', async () => {
+    const spawned = spawnEach();
+    const rt = create({ jsWorkerFactory, jsRecoverExhaustion: false });
+    const booted = rt.js.initialize();
+    spawned[0].simulate({ type: 'ready' });
+    await booted;
+    const p = rt.js.execute('x');
+    await flush();
+    const [run] = spawned[0].posted.filter((m) => m.type === 'run');
+    spawned[0].simulate({
+      type: 'done',
+      runId: run.runId,
+      success: false,
+      error: 'out of memory',
+      timedOut: false,
+      exhausted: true,
+    });
+    await flush();
+    // With recovery on (the default), the runner starts a second worker here.
+    expect(spawned).toHaveLength(1);
+    expect((await p).error).toBe('out of memory');
   });
 
   it('timeouts are plain options/properties', () => {
@@ -180,7 +250,7 @@ describe('createSandboxRuntime', () => {
   });
 
   it('defaults: proxy disabled, js mode, 5 s budget', () => {
-    const rt = createSandboxRuntime({ jsWorkerFactory });
+    const rt = create({ jsWorkerFactory });
     expect(rt.auth.proxyBase()).toBeNull();
     expect(rt.facade.mode.get()).toBe('js');
     expect(rt.js.timeoutMs).toBe(5000);
