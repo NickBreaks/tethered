@@ -1,7 +1,8 @@
 name: Release
 
-# Publishes to npm only when a release tag (vX.Y.Z or vX.Y.Z-pre) is
-# pushed. A push to a branch never publishes. The npm token is the
+# Stages a release on npm only when a release tag (vX.Y.Z or vX.Y.Z-pre)
+# is pushed. A push to a branch never stages. A staged version is not
+# public until a maintainer approves it with 2FA. The npm token is the
 # NPM_TOKEN secret of the `npm` environment.
 on:
   push:
@@ -48,12 +49,14 @@ jobs:
       - run: npm test
       - run: npx playwright install --with-deps chromium-headless-shell
       - run: npm run test:integration
+      # `npm stage publish` must have npm 11.15.0 or later.
+      - run: npm install -g npm@latest
       # A pre-release version goes to the `next` dist-tag, not `latest`.
-      - name: Publish
+      - name: Stage
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           case "$GITHUB_REF_NAME" in
-            *-*) npm publish --provenance --access public --tag next ;;
-            *) npm publish --provenance --access public ;;
+            *-*) npm stage publish --provenance --access public --tag next ;;
+            *) npm stage publish --provenance --access public ;;
           esac

@@ -56,25 +56,36 @@ have these headers, it must add a service-worker shim.
 
 ## Releasing
 
-The release workflow (`.github/workflows/release.yml`) publishes to npm
-only when you push a tag `vX.Y.Z` or `vX.Y.Z-pre`. A push to a branch
-never publishes. A pre-release goes to the `next` dist-tag. npm adds
-provenance to each version.
+The release workflow (`.github/workflows/release.yml`) stages a version
+on npm only when you push a tag `vX.Y.Z` or `vX.Y.Z-pre`. A push to a
+branch never stages. A staged version is not public until you approve it
+with 2FA. A pre-release goes to the `next` dist-tag. npm adds provenance
+to each version.
 
 1. Update `CHANGELOG.md` and the `version` in `package.json`.
 2. Commit the changes and push them to `main`.
 3. Make sure that CI passes on that commit.
 4. Tag the commit `vX.Y.Z` and push the tag.
+5. Wait for the release workflow to pass.
+6. Get the stage ID with `npm stage list tethered`.
+7. Download the staged tarball with `npm stage download <stage-id>`.
+8. Examine the tarball. Optionally, install it in a test project.
+9. Approve the version with `npm stage approve <stage-id>`. You can also
+   approve it on the Staged Packages tab on npmjs.com.
 
 The workflow stops if the tag is not the `version` in `package.json`, or
 if the tagged commit is not on `main`. It runs all checks before it
-publishes.
+stages the version.
 
 ### One-time setup
 
-1. On npmjs.com, make a granular access token with read and write access
-   to packages. Let it skip 2FA, because CI cannot enter a code.
-2. In the GitHub repository, add the `npm` environment (Settings >
+1. Turn on 2FA for your npm account. Approval of a staged version must
+   have 2FA.
+2. On npmjs.com, make a granular access token with read and write access
+   to all packages. Do not let it skip 2FA. Staging does not need 2FA,
+   thus a stolen token cannot make a version public. After the first
+   release, make a new token that has access only to `tethered`.
+3. In the GitHub repository, add the `npm` environment (Settings >
    Environments). Optionally, add yourself as a required reviewer.
-3. Add the token to that environment as the `NPM_TOKEN` secret.
-4. Add a tag ruleset for `v*` so that only you can push release tags.
+4. Add the token to that environment as the `NPM_TOKEN` secret.
+5. Add a tag ruleset for `v*` so that only you can push release tags.
