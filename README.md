@@ -76,10 +76,18 @@ tethered is 0.x. Until 1.0, a minor release (0.x.0) can break the API. A
 patch release (0.x.y) will not break the API. The
 [changelog](CHANGELOG.md) lists every breaking change.
 
-The engine will change before 1.0. A later 0.x release will replace the
-QuickJS engine. This can change guest behaviour that comes from the
-engine, for example error text, stack depth and the built-ins. The
-changelog will list these changes.
+## Known issues
+
+These issues come from the engine (quickjs-emscripten-core 0.32.0).
+
+- An unhandled promise rejection does not fail the run. The worker drops
+  an exception in a `.then()` handler or in an `async` function, and the
+  run reports success. A rejected top-level result fails the run. Refer
+  to the [timer capability](docs/threat-model.md#timer-timercapability).
+- Most deep recursions replace the worker. The stack of the browser
+  overflows before the engine limit, so the guest cannot catch the
+  error. The run fails, and the runner replaces the worker. Refer to the
+  stack limit in the [threat model](docs/threat-model.md#in-scope).
 
 ## Docs
 
