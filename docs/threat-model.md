@@ -172,9 +172,10 @@ in its errors.
   overflows the stack of the browser or reaches the engine limit. The
   size of each frame decides which occurs first.
   - The stack of the browser overflows first for most recursions, and
-    for deeply nested source in `eval()`. Then the engine cannot free
-    the runtime, and the runner replaces the worker. The run fails, and
-    the runner does not retry it.
+    for deeply nested source in `eval()` or in `JSON.parse()`. Then the
+    engine cannot free the runtime, and the runner replaces the worker.
+    The run fails, and the runner does not retry it. A lower limit lets
+    the engine catch most recursions, but not the nested source.
   - The engine limit occurs first for frames with many local variables.
     Then the guest gets an `InternalError` that it can catch, and the
     worker stays.

@@ -78,16 +78,23 @@ patch release (0.x.y) will not break the API. The
 
 ## Known issues
 
-These issues come from the engine (quickjs-emscripten-core 0.32.0).
+These issues come from the engine (quickjs-emscripten-core 0.32.0) and
+from the stack limit that tethered sets.
 
-- An unhandled promise rejection does not fail the run. The worker drops
-  an exception in a `.then()` handler or in an `async` function, and the
+- An unhandled promise rejection does not fail the run. The engine gives
+  the host no API to find these rejections. Thus the worker drops an
+  exception in a `.then()` handler or in an `async` function, and the
   run reports success. A rejected top-level result fails the run. Refer
   to the [timer capability](docs/threat-model.md#timer-timercapability).
-- Most deep recursions replace the worker. The stack of the browser
-  overflows before the engine limit, so the guest cannot catch the
-  error. The run fails, and the runner replaces the worker. Refer to the
-  stack limit in the [threat model](docs/threat-model.md#in-scope).
+- Most deep recursions replace the worker. The engine stack limit does
+  not count the stack of the browser. With the 1 MiB limit of tethered,
+  the stack of the browser usually overflows first. Then the guest
+  cannot catch the error, the run fails, and the runner replaces the
+  worker. A lower limit lets the guest catch most of these errors, but
+  it permits much less recursion. Deeply nested source in `eval()` or
+  in `JSON.parse()` overflows the stack of the browser at all limits.
+  Refer to the stack limit in the
+  [threat model](docs/threat-model.md#in-scope).
 
 ## Docs
 
