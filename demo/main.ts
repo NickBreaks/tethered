@@ -28,7 +28,7 @@ console.log(data.greeting);
 data.numbers.reduce((a, b) => a + b, 0);`,
   'Blocked host': `// Not on the allowlist: refused on the host before any request is made.
 fetch('https://blocked.example.net/secrets');`,
-  'Timer': `setTimeout(() => console.log('timer fired'), 100);
+  Timer: `setTimeout(() => console.log('timer fired'), 100);
 console.log('timer scheduled');`,
   'Storage + disk': `storage.setItem('visits', String(Number(storage.getItem('visits') ?? 0) + 1));
 console.log('visits', storage.getItem('visits'));
@@ -98,7 +98,9 @@ function withDemoFiles(fetchCap: FetchCapability): SandboxCapability {
         // Not a URL: FetchCapability refuses it.
       }
       if (url?.origin === location.origin && !url.pathname.startsWith(demoDir.pathname)) {
-        throw new Error(`fetch failed: only the files of the demo (${demoDir.pathname}) are allowed on this host.`);
+        throw new Error(
+          `fetch failed: only the files of the demo (${demoDir.pathname}) are allowed on this host.`,
+        );
       }
       // Stop and the time limit abort the signal of the run. Then the
       // requests of the run abort.
@@ -157,12 +159,20 @@ async function run(): Promise<void> {
   outputList.replaceChildren();
   shownContents.clear();
   const settingsError = applySettings();
-  if (settingsError) append({ type: 'warn', content: `${settingsError} (fetch disabled for this run)` });
+  if (settingsError)
+    append({ type: 'warn', content: `${settingsError} (fetch disabled for this run)` });
   setStatus('Running...');
   const result = await rt.facade.execute(codeInput.value);
   // The error usually arrived as an output entry already.
-  if (result.error && !shownContents.has(result.error)) append({ type: 'error', content: result.error });
-  const outcome = stopRequested ? 'stopped' : result.timedOut ? 'timed out' : result.success ? 'done' : 'failed';
+  if (result.error && !shownContents.has(result.error))
+    append({ type: 'error', content: result.error });
+  const outcome = stopRequested
+    ? 'stopped'
+    : result.timedOut
+      ? 'timed out'
+      : result.success
+        ? 'done'
+        : 'failed';
   setStatus(`${outcome} in ${Math.round(result.durationMs)} ms`);
 }
 

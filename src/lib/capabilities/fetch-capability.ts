@@ -188,7 +188,9 @@ export class FetchCapability implements SandboxCapability {
         throw new TypeError('FetchCapability corsProxyUrl must be a valid URL.');
       }
       if (hasUserInfo(endpoint)) {
-        throw new TypeError('FetchCapability corsProxyUrl must not contain a user name or a password.');
+        throw new TypeError(
+          'FetchCapability corsProxyUrl must not contain a user name or a password.',
+        );
       }
     }
   }
@@ -350,7 +352,9 @@ export class FetchCapability implements SandboxCapability {
     const endpoint = proxyEndpoint(base);
     if (endpoint === null) throw new Error(PROXY_URL_INVALID_MSG);
     if (hasUserInfo(endpoint)) {
-      throw new Error('Proxy fetch failed: the CORS proxy URL must not contain a user name or a password.');
+      throw new Error(
+        'Proxy fetch failed: the CORS proxy URL must not contain a user name or a password.',
+      );
     }
     const authHeader = this.proxyAuth.authHeader();
     if (authHeader === null) {

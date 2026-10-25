@@ -1,0 +1,7 @@
+dist/
+demo/dist/
+coverage/
+node_modules/
+**/__screenshots__/
+package-lock.json
+*.md

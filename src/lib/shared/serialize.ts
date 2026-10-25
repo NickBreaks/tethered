@@ -28,7 +28,8 @@ function jsonDepth(json: string): number {
   for (let i = 0; i < json.length; i++) {
     const c = json.charCodeAt(i);
     if (inString) {
-      if (c === 0x5c) i++; // A backslash escapes the next character.
+      if (c === 0x5c)
+        i++; // A backslash escapes the next character.
       else if (c === 0x22) inString = false;
     } else if (c === 0x22) {
       inString = true;

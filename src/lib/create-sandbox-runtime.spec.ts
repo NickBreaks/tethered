@@ -29,7 +29,9 @@ function fakeRunner(content = 'fake ran'): CodeRunner {
     initError: createValue<string | null>(null).asReadonly(),
     activeTag: createValue<string | null>(null).asReadonly(),
     initialize: vi.fn().mockResolvedValue(undefined),
-    execute: vi.fn().mockResolvedValue({ success: true, output: [entry], timedOut: false, durationMs: 0 }),
+    execute: vi
+      .fn()
+      .mockResolvedValue({ success: true, output: [entry], timedOut: false, durationMs: 0 }),
     abort: vi.fn().mockResolvedValue(undefined),
     onOutput: () => () => undefined,
   };
@@ -120,9 +122,7 @@ describe('createSandboxRuntime', () => {
   });
 
   it('an extra runner cannot replace the built-in js runner', () => {
-    expect(() => create({ jsWorkerFactory, runners: { js: fakeRunner() } })).toThrow(
-      /"js"/,
-    );
+    expect(() => create({ jsWorkerFactory, runners: { js: fakeRunner() } })).toThrow(/"js"/);
   });
 
   it('passes the jsConcurrency option to the JS runner', async () => {

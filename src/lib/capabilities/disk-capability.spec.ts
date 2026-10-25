@@ -45,8 +45,16 @@ describe('DiskCapability', () => {
   });
 
   afterEach(() => {
-    try { vm.dispose(); } catch { /* may already be disposed */ }
-    try { runtime.dispose(); } catch { /* may already be disposed */ }
+    try {
+      vm.dispose();
+    } catch {
+      /* may already be disposed */
+    }
+    try {
+      runtime.dispose();
+    } catch {
+      /* may already be disposed */
+    }
   });
 
   async function evalAndDump(code: string): Promise<unknown> {
@@ -90,22 +98,22 @@ describe('DiskCapability', () => {
   it('should list files', async () => {
     const cap = new DiskCapability(backend);
     injectCap(vm, cap);
-    const val = await evalAndDump(`
+    const val = (await evalAndDump(`
       disk.writeFile('/a.txt', 'a');
       disk.writeFile('/b.txt', 'b');
       disk.listFiles('/');
-    `) as string[];
+    `)) as string[];
     expect([...val].sort()).toEqual(['a.txt', 'b.txt']);
   });
 
   it('listFiles() with no argument lists the root', async () => {
     const cap = new DiskCapability(backend);
     injectCap(vm, cap);
-    const val = await evalAndDump(`
+    const val = (await evalAndDump(`
       disk.writeFile('/a.txt', 'a');
       disk.writeFile('/dir/b.txt', 'b');
       disk.listFiles();
-    `) as string[];
+    `)) as string[];
     expect([...val].sort()).toEqual(['a.txt', 'dir/']);
   });
 
@@ -137,13 +145,13 @@ describe('DiskCapability', () => {
   it('should list direct children of subdirectory', async () => {
     const cap = new DiskCapability(backend);
     injectCap(vm, cap);
-    const val = await evalAndDump(`
+    const val = (await evalAndDump(`
       disk.writeFile('/data/hello.txt', 'Hello');
       disk.writeFile('/data/sub/nested.txt', 'Nested');
       disk.writeFile('/data/sub/other.txt', 'Other');
       disk.writeFile('/database.txt', 'not a child');
       disk.listFiles('/data');
-    `) as string[];
+    `)) as string[];
     // A subdirectory shows one time. A sibling with the same prefix does not show.
     expect([...val].sort()).toEqual(['hello.txt', 'sub/']);
   });
@@ -176,11 +184,22 @@ describe('DiskCapability', () => {
     injectCap(vm, cap);
     const r1 = await evalAsync(vm, `disk.writeFile('/persist.txt', 'data')`);
     if ('value' in r1) r1.value.dispose();
-    else { r1.error.dispose(); throw new Error('Expected success'); }
+    else {
+      r1.error.dispose();
+      throw new Error('Expected success');
+    }
 
     // Recreate context
-    try { vm.dispose(); } catch { /* ignore */ }
-    try { runtime.dispose(); } catch { /* ignore */ }
+    try {
+      vm.dispose();
+    } catch {
+      /* ignore */
+    }
+    try {
+      runtime.dispose();
+    } catch {
+      /* ignore */
+    }
     runtime = module.newRuntime();
     vm = runtime.newContext();
 
@@ -268,12 +287,12 @@ describe('DiskCapability', () => {
   it('listFiles resolves . and .. in the directory path', async () => {
     const cap = new DiskCapability(backend);
     injectCap(vm, cap);
-    const val = await evalAndDump(`
+    const val = (await evalAndDump(`
       disk.writeFile('/top.txt', 'x');
       disk.writeFile('/data/hello.txt', 'Hello');
       disk.writeFile('/data/sub/nested.txt', 'Nested');
       [disk.listFiles('/data/sub/..'), disk.listFiles('/data/./sub/'), disk.listFiles('/..')];
-    `) as string[][];
+    `)) as string[][];
     expect([...val[0]!].sort()).toEqual(['hello.txt', 'sub/']);
     expect(val[1]).toEqual(['nested.txt']);
     expect([...val[2]!].sort()).toEqual(['data/', 'top.txt']);

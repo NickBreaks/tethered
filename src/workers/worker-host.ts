@@ -60,9 +60,7 @@ interface RunOutcome {
 
 /** The state of the value of the top-level eval, after the event loop ran. */
 type SettledValue =
-  | { kind: 'value'; value: unknown }
-  | { kind: 'rejected'; error: unknown }
-  | { kind: 'pending' };
+  { kind: 'value'; value: unknown } | { kind: 'rejected'; error: unknown } | { kind: 'pending' };
 
 /**
  * QuickJS execution engine hosted inside the web worker. It has no DOM or
@@ -189,9 +187,7 @@ export class JsWorkerHost {
       timedOut: outcome.timedOut,
       // The guest controls the error. Cut it before the post, so that the
       // full string is not copied to the main thread.
-      ...(outcome.error !== undefined
-        ? { error: outcome.error.slice(0, MAX_ERROR_CHARS) }
-        : {}),
+      ...(outcome.error !== undefined ? { error: outcome.error.slice(0, MAX_ERROR_CHARS) } : {}),
       ...(outcome.exhausted ? { exhausted: true } : {}),
       ...(outcome.broken ? { broken: true } : {}),
     });
@@ -351,7 +347,9 @@ export class JsWorkerHost {
     const inner = state.type === 'fulfilled' ? state.value : state.error;
     try {
       const value: unknown = vm.dump(inner);
-      return state.type === 'fulfilled' ? { kind: 'value', value } : { kind: 'rejected', error: value };
+      return state.type === 'fulfilled'
+        ? { kind: 'value', value }
+        : { kind: 'rejected', error: value };
     } finally {
       if (inner.alive) inner.dispose();
     }

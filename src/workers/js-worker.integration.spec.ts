@@ -111,19 +111,23 @@ describe('JsRunner on a real Worker', () => {
   it.each([
     ["throw new Error('out of memory')"],
     ["throw { name: 'InternalError', message: 'out of memory' }"],
-  ])('%s fails once, with no retry and no worker replacement', async (code) => {
-    const starts: string[] = [];
-    const recycles: string[] = [];
-    runner.onRun((info) => {
-      if (info) starts.push(info.tag);
-    });
-    runner.onRecycle((reason) => recycles.push(reason));
-    const result = await runner.execute(code, { tag: 'g' });
-    expect(result.success).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(starts).toEqual(['g']);
-    expect(recycles).toEqual([]);
-  }, 20_000);
+  ])(
+    '%s fails once, with no retry and no worker replacement',
+    async (code) => {
+      const starts: string[] = [];
+      const recycles: string[] = [];
+      runner.onRun((info) => {
+        if (info) starts.push(info.tag);
+      });
+      runner.onRecycle((reason) => recycles.push(reason));
+      const result = await runner.execute(code, { tag: 'g' });
+      expect(result.success).toBe(false);
+      expect(result.timedOut).toBe(false);
+      expect(starts).toEqual(['g']);
+      expect(recycles).toEqual([]);
+    },
+    20_000,
+  );
 
   it('function f() { f() } f() fails once, with no retry, and the broken worker is replaced', async () => {
     // The stack overflow makes the engine fail to free the runtime.
@@ -208,7 +212,8 @@ describe('JsRunner on a real Worker', () => {
     expect(result.output).toContainEqual(
       expect.objectContaining({
         type: 'system',
-        content: 'Output limit reached (1048576 characters). The runner dropped the remaining output.',
+        content:
+          'Output limit reached (1048576 characters). The runner dropped the remaining output.',
       }),
     );
     expect(streamed).toEqual(result.output);

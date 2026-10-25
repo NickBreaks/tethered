@@ -27,10 +27,14 @@ const require = createRequire(import.meta.url);
 
 rmSync(dist, { recursive: true, force: true });
 
-execFileSync(process.execPath, [require.resolve('typescript/bin/tsc'), '-p', 'tsconfig.build.json'], {
-  cwd: root,
-  stdio: 'inherit',
-});
+execFileSync(
+  process.execPath,
+  [require.resolve('typescript/bin/tsc'), '-p', 'tsconfig.build.json'],
+  {
+    cwd: root,
+    stdio: 'inherit',
+  },
+);
 
 // Keep only the declarations reachable from the public entries.
 const IMPORT_SPECIFIER = /(?:from\s+|import\s*\(\s*|import\s+)['"](\.[^'"]+)['"]/g;
@@ -63,4 +67,7 @@ await build({
 });
 console.log('build: wrote dist/js-worker.js');
 
-execFileSync(process.execPath, [join(root, 'scripts/verify-build.mjs')], { cwd: root, stdio: 'inherit' });
+execFileSync(process.execPath, [join(root, 'scripts/verify-build.mjs')], {
+  cwd: root,
+  stdio: 'inherit',
+});

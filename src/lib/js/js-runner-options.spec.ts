@@ -288,7 +288,7 @@ describe('JsRunner run lifecycle', () => {
         expect((await pB).success).toBe(true);
       });
 
-      it("no late cap-call, output or done from the old run reaches the new run", async () => {
+      it('no late cap-call, output or done from the old run reaches the new run', async () => {
         await build();
         const pA = runner.execute('hang()', { tag: 'A' });
         await settle();
@@ -555,7 +555,9 @@ describe('JsRunner run lifecycle', () => {
     const factory = () => new FakeJsWorker() as unknown as Worker;
 
     it.each(BAD)('the constructor rejects timeoutMs %s', (timeoutMs) => {
-      expect(() => new JsRunner(registry, { workerFactory: factory, timeoutMs })).toThrow(RangeError);
+      expect(() => new JsRunner(registry, { workerFactory: factory, timeoutMs })).toThrow(
+        RangeError,
+      );
     });
 
     it.each(BAD_BOOT)('the constructor rejects bootTimeoutMs %s', (bootTimeoutMs) => {
@@ -998,19 +1000,22 @@ describe('JsRunner run lifecycle', () => {
       'Error: out of memory',
       "capability 'd3' setup failed: {}",
       'InternalError: stack overflow',
-    ])('does not retry an error with the text %j when the worker does not set exhausted', async (error) => {
-      await build();
-      const reasons: string[] = [];
-      runner.onRecycle((r) => reasons.push(r));
-      const p = runner.execute('throwIt()');
-      await settle();
-      current().done(current().runs[0].runId, { success: false, error });
-      const result = await p;
-      expect(result.error).toBe(error);
-      expect(reasons).toEqual([]);
-      expect(workers).toHaveLength(1);
-      expect(workers[0].runs).toHaveLength(1);
-    });
+    ])(
+      'does not retry an error with the text %j when the worker does not set exhausted',
+      async (error) => {
+        await build();
+        const reasons: string[] = [];
+        runner.onRecycle((r) => reasons.push(r));
+        const p = runner.execute('throwIt()');
+        await settle();
+        current().done(current().runs[0].runId, { success: false, error });
+        const result = await p;
+        expect(result.error).toBe(error);
+        expect(reasons).toEqual([]);
+        expect(workers).toHaveLength(1);
+        expect(workers[0].runs).toHaveLength(1);
+      },
+    );
 
     it('does not retry a run that called invokeHost, but still replaces the worker', async () => {
       const invokeHost = vi.fn(async () => 'ok');
@@ -1162,44 +1167,61 @@ describe('JsRunner run lifecycle', () => {
     it.each([
       ['the worker reports done', (_r: JsRunner, w: FakeJsWorker, runId: number) => w.done(runId)],
       ['abort()', (r: JsRunner) => r.abort()],
-    ])('aborts the signal of each host call of a run when %s, and not before', async (_name, end) => {
-      const signals: AbortSignal[] = [];
-      registry.register({
-        name: 'res',
-        description: 'records the signal',
-        stubInfo: { name: 'res', type: 'function' },
-        invokeHost: (_method, _args, context) => {
-          signals.push(context!.signal);
-          return new Promise(() => {});
-        },
-      });
-      registry.setEnabled('res', true);
-      await build();
-      const p = runner.execute('res()');
-      await settle();
-      const worker = workers[0];
-      const runId = worker.runs[0].runId;
-      worker.simulate({ type: 'cap-call', callId: 1, runId, capability: 'res', method: 'res', args: [] });
-      await settle();
-      expect(signals).toHaveLength(1);
-      expect(signals[0].aborted).toBe(false);
-      end(runner, worker, runId);
-      await p;
-      expect(signals[0].aborted).toBe(true);
+    ])(
+      'aborts the signal of each host call of a run when %s, and not before',
+      async (_name, end) => {
+        const signals: AbortSignal[] = [];
+        registry.register({
+          name: 'res',
+          description: 'records the signal',
+          stubInfo: { name: 'res', type: 'function' },
+          invokeHost: (_method, _args, context) => {
+            signals.push(context!.signal);
+            return new Promise(() => {});
+          },
+        });
+        registry.setEnabled('res', true);
+        await build();
+        const p = runner.execute('res()');
+        await settle();
+        const worker = workers[0];
+        const runId = worker.runs[0].runId;
+        worker.simulate({
+          type: 'cap-call',
+          callId: 1,
+          runId,
+          capability: 'res',
+          method: 'res',
+          args: [],
+        });
+        await settle();
+        expect(signals).toHaveLength(1);
+        expect(signals[0].aborted).toBe(false);
+        end(runner, worker, runId);
+        await p;
+        expect(signals[0].aborted).toBe(true);
 
-      // The next run gets a new signal that is not aborted.
-      const p2 = runner.execute('res()');
-      await settle();
-      const next = current();
-      const runId2 = next.runs[next.runs.length - 1].runId;
-      next.simulate({ type: 'cap-call', callId: 2, runId: runId2, capability: 'res', method: 'res', args: [] });
-      await settle();
-      expect(signals).toHaveLength(2);
-      expect(signals[1].aborted).toBe(false);
-      next.done(runId2);
-      await p2;
-      expect(signals[1].aborted).toBe(true);
-    });
+        // The next run gets a new signal that is not aborted.
+        const p2 = runner.execute('res()');
+        await settle();
+        const next = current();
+        const runId2 = next.runs[next.runs.length - 1].runId;
+        next.simulate({
+          type: 'cap-call',
+          callId: 2,
+          runId: runId2,
+          capability: 'res',
+          method: 'res',
+          args: [],
+        });
+        await settle();
+        expect(signals).toHaveLength(2);
+        expect(signals[1].aborted).toBe(false);
+        next.done(runId2);
+        await p2;
+        expect(signals[1].aborted).toBe(true);
+      },
+    );
   });
 });
 

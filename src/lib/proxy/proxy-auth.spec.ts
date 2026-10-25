@@ -40,7 +40,10 @@ describe('ProxyAuth', () => {
   describe('authHeader() fresh-read invariant', () => {
     it.each<[string, () => void]>([
       ['sessionStorage is empty', () => {}],
-      ['the stored token is an empty string', () => sessionStorage.setItem('cors_proxy_auth_token', '')],
+      [
+        'the stored token is an empty string',
+        () => sessionStorage.setItem('cors_proxy_auth_token', ''),
+      ],
       ['setToken got only whitespace', () => service.setToken('   ')],
     ])('returns null when %s', (_name, arrange) => {
       arrange();
@@ -128,9 +131,18 @@ describe('ProxyAuth', () => {
     it('never uses localStorage', () => {
       // The trap records each access to localStorage.
       const touched: PropertyKey[] = [];
-      vi.stubGlobal('localStorage', new Proxy({}, {
-        get: (_target, key) => { touched.push(key); return () => null; },
-      }));
+      vi.stubGlobal(
+        'localStorage',
+        new Proxy(
+          {},
+          {
+            get: (_target, key) => {
+              touched.push(key);
+              return () => null;
+            },
+          },
+        ),
+      );
       try {
         service.setToken('x');
         expect(service.authHeader()).toBe('Bearer x');

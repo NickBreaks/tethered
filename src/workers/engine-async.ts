@@ -33,7 +33,9 @@ import type {
 /** The pointer types of the engine. In the wasm memory, they are numbers. */
 type RuntimePointer = Parameters<QuickJSAsyncContext['getMemory']>[0];
 type ValuePointer = Parameters<ReturnType<QuickJSAsyncContext['getMemory']>['heapValueHandle']>[0];
-type CharPointer = Parameters<ReturnType<QuickJSAsyncContext['getMemory']>['consumeJSCharPointer']>[0];
+type CharPointer = Parameters<
+  ReturnType<QuickJSAsyncContext['getMemory']>['consumeJSCharPointer']
+>[0];
 
 /** The part of the Emscripten module that this module uses. */
 interface EngineModule {
@@ -123,8 +125,7 @@ function contextInternals(vm: QuickJSAsyncContext): ContextInternals {
 
 /** The result of one call of `executePendingJobsAsync()`. */
 type AsyncJobsResult =
-  | { executed: number; error?: undefined }
-  | { executed?: undefined; error: QuickJSHandle };
+  { executed: number; error?: undefined } | { executed?: undefined; error: QuickJSHandle };
 
 /**
  * Runs at most `maxJobs` promise jobs (-1 for all). A host call in a job
@@ -169,8 +170,7 @@ export async function executePendingJobsAsync(
 
 /** The result of one call of `callFunctionAsync()`. */
 type AsyncCallResult =
-  | { value: QuickJSHandle; error?: undefined }
-  | { value?: undefined; error: QuickJSHandle };
+  { value: QuickJSHandle; error?: undefined } | { value?: undefined; error: QuickJSHandle };
 
 /**
  * Calls the guest function `fn`. A host call in `fn` can suspend the

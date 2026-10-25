@@ -86,7 +86,7 @@ describe('JsRunner', () => {
   // Test 5: Multiple console calls produce entries in order
   it('should produce multiple entries in order', async () => {
     const result = await service.execute(
-      'console.log("first"); console.warn("second"); console.error("third")'
+      'console.log("first"); console.warn("second"); console.error("third")',
     );
     expect(result.success).toBe(true);
     expect(result.output.length).toBeGreaterThanOrEqual(4);
@@ -266,15 +266,22 @@ describe('JsRunner', () => {
       };
       it.each([
         ['a null-prototype object', () => Object.create(null) as unknown],
-        ['an Error with a message getter that throws', () => badMessage(() => {
-          throw new Error('getter');
-        })],
+        [
+          'an Error with a message getter that throws',
+          () =>
+            badMessage(() => {
+              throw new Error('getter');
+            }),
+        ],
         ['an Error with a message that is not a string', () => badMessage(() => 42)],
-        ['an object whose toString throws', () => ({
-          toString() {
-            throw new Error('toString');
-          },
-        })],
+        [
+          'an object whose toString throws',
+          () => ({
+            toString() {
+              throw new Error('toString');
+            },
+          }),
+        ],
       ])('replies "host call failed" for %s', async (_label, make) => {
         registry.register({
           name: 'boom',
@@ -318,7 +325,7 @@ describe('JsRunner', () => {
       registry.setEnabled('storage', true);
       const result = await service.execute('1');
       expect(result.output[0]).toEqual(
-        expect.objectContaining({ type: 'system', content: '[fetch, storage enabled]' })
+        expect.objectContaining({ type: 'system', content: '[fetch, storage enabled]' }),
       );
     });
 
@@ -326,7 +333,7 @@ describe('JsRunner', () => {
     it('should emit system message when no capabilities enabled', async () => {
       const result = await service.execute('1');
       expect(result.output[0]).toEqual(
-        expect.objectContaining({ type: 'system', content: '[no capabilities enabled]' })
+        expect.objectContaining({ type: 'system', content: '[no capabilities enabled]' }),
       );
     });
   });
@@ -358,7 +365,7 @@ describe('JsRunner', () => {
         expect.arrayContaining([
           expect.objectContaining({ type: 'warn', content: 'w' }),
           expect.objectContaining({ type: 'error', content: 'e' }),
-        ])
+        ]),
       );
     });
 
@@ -538,7 +545,7 @@ describe('JsRunner', () => {
     it('should include timer in the system message when enabled', async () => {
       const result = await service.execute('1');
       expect(result.output[0]).toEqual(
-        expect.objectContaining({ type: 'system', content: '[timer enabled]' })
+        expect.objectContaining({ type: 'system', content: '[timer enabled]' }),
       );
     });
 
@@ -807,9 +814,7 @@ describe('JsRunner', () => {
       off();
       expect(streamed).toEqual(result.output);
       expect(streamedAtSettle).toBe(result.output.length);
-      expect(streamed.map((e) => e.content)).toEqual(
-        expect.arrayContaining(['one', 'two', '3']),
-      );
+      expect(streamed.map((e) => e.content)).toEqual(expect.arrayContaining(['one', 'two', '3']));
     });
   });
 });
@@ -881,7 +886,8 @@ describe('JsRunner default output limit (in-process worker)', () => {
     expect(result.output).toContainEqual(
       expect.objectContaining({
         type: 'system',
-        content: 'Output limit reached (1048576 characters). The runner dropped the remaining output.',
+        content:
+          'Output limit reached (1048576 characters). The runner dropped the remaining output.',
       }),
     );
     expect(streamed).toEqual(result.output);

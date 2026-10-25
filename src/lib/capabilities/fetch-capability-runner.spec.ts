@@ -92,7 +92,9 @@ describe('FetchCapability through JsRunner', () => {
       (_url, init) =>
         new Promise<Response>((_resolve, reject) => {
           signal = init.signal ?? undefined;
-          signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
         }),
     );
     const run = runner.execute(`fetch('https://example.com/slow');`, { timeoutMs: 10_000 });

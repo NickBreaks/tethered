@@ -56,8 +56,14 @@ export class RuntimeFacade {
       this.#mode,
       ...all.map(pick),
     ];
-    this.ready = derived(sources((r) => r.ready), () => active().ready.get());
-    this.isRunning = derived(sources((r) => r.isRunning), () => active().isRunning.get());
+    this.ready = derived(
+      sources((r) => r.ready),
+      () => active().ready.get(),
+    );
+    this.isRunning = derived(
+      sources((r) => r.isRunning),
+      () => active().isRunning.get(),
+    );
     // The runner's own message has priority. The fallback is a bare
     // rejection of an initialize() that the facade started.
     this.initError = derived(

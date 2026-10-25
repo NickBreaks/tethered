@@ -27,7 +27,10 @@ export {
 } from './lib/capabilities/storage-capability.js';
 export type { StorageBackend } from './lib/capabilities/storage-capability.js';
 export { TimerCapability } from './lib/capabilities/timer-capability.js';
-export { FetchCapability, type FetchCapabilityOptions } from './lib/capabilities/fetch-capability.js';
+export {
+  FetchCapability,
+  type FetchCapabilityOptions,
+} from './lib/capabilities/fetch-capability.js';
 export {
   DiskCapability,
   MapDiskBackend,

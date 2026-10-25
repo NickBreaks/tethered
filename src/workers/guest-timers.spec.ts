@@ -31,8 +31,16 @@ describe('GuestTimers', () => {
   afterEach(() => {
     timers.cleanup();
     // The engine can throw during dispose, also when no handle leaks.
-    try { vm.dispose(); } catch { /* may already be disposed */ }
-    try { runtime.dispose(); } catch { /* may already be disposed */ }
+    try {
+      vm.dispose();
+    } catch {
+      /* may already be disposed */
+    }
+    try {
+      runtime.dispose();
+    } catch {
+      /* may already be disposed */
+    }
   });
 
   /** The number of live objects in the runtime. A leaked handle keeps its object alive. */
@@ -96,7 +104,9 @@ describe('GuestTimers', () => {
 
   describe.each(['setTimeout', 'setInterval'])('%s', (fnName) => {
     it('should return distinct positive integer IDs from successive calls', async () => {
-      const ids = (await evalAndDump(`[${fnName}(() => {}, 0), ${fnName}(() => {}, 0)]`)) as number[];
+      const ids = (await evalAndDump(
+        `[${fnName}(() => {}, 0), ${fnName}(() => {}, 0)]`,
+      )) as number[];
       expect(ids).toHaveLength(2);
       for (const id of ids) {
         expect(Number.isInteger(id)).toBe(true);

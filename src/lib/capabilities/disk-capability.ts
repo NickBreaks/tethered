@@ -43,7 +43,10 @@ export class IndexedDBDiskBackend implements DiskBackend {
   close(): void {
     const db = this.#db;
     this.#db = null;
-    void db?.then((d) => d.close(), () => {});
+    void db?.then(
+      (d) => d.close(),
+      () => {},
+    );
   }
 
   #open(): Promise<IDBDatabase> {

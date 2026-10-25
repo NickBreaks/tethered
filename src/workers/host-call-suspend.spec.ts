@@ -65,7 +65,8 @@ describe('host calls outside the top-level script', () => {
     registry.register(new TimerCapability());
     registry.register(echoCap);
     registry.register(boomCap);
-    for (const name of ['fetch', 'storage', 'timer', 'echo', 'boom']) registry.setEnabled(name, true);
+    for (const name of ['fetch', 'storage', 'timer', 'echo', 'boom'])
+      registry.setEnabled(name, true);
     runner = new JsRunner(registry, {
       workerFactory: createJsWorkerFactory({ allowInProcess: true }),
     });
@@ -103,10 +104,9 @@ describe('host calls outside the top-level script', () => {
 
   it('a host call in a .then() callback gives its value', async () => {
     store.set('n', 'five');
-    const result = await runner.execute(
-      "Promise.resolve().then(() => storage.getItem('n'))",
-      { timeoutMs: 3000 },
-    );
+    const result = await runner.execute("Promise.resolve().then(() => storage.getItem('n'))", {
+      timeoutMs: 3000,
+    });
     expect(result.success).toBe(true);
     expect(results(result)).toEqual(['five']);
   }, 15_000);

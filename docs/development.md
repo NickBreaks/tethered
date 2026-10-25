@@ -9,6 +9,8 @@ You must have Node 20 or later.
 | `npm test` | Run the unit specs with Vitest under jsdom (`vitest.config.ts`). There, the engine runs in-process. |
 | `npm run test:integration` | Run the specs in a real browser: headless Chromium through Playwright (`vitest.integration.config.ts`). They use a real `Worker` and a real IndexedDB. |
 | `npm run lint` | Run ESLint (flat config, `eslint.config.js`). This includes the import boundaries between the core and the workers. |
+| `npm run format` | Format the code, JSON, YAML and HTML with Prettier (`.prettierrc.json`). Prettier does not format Markdown. |
+| `npm run format:check` | Make sure that all files have the Prettier format. CI runs this command. |
 | `npm run typecheck` | Run `tsc --noEmit` on the sources, specs, configs and the demo. |
 | `npm run dev:demo` | Serve the demo page (`demo/`) with Vite. |
 | `npm run build:demo` | Build the demo into `demo/dist/`. |

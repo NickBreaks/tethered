@@ -41,8 +41,7 @@ vi.mock('quickjs-emscripten-core', async (importOriginal) => {
 /** The byte length of the WASM memory of a module. WASM memory only grows. */
 function heapBytes(module: QuickJSAsyncWASMModule): number {
   // `module` is protected in the `.d.ts` of the library.
-  return (module as unknown as { module: { HEAPU8: Uint8Array } }).module.HEAPU8.buffer
-    .byteLength;
+  return (module as unknown as { module: { HEAPU8: Uint8Array } }).module.HEAPU8.buffer.byteLength;
 }
 
 type DoneMsg = Extract<JsWorkerToMainMsg, { type: 'done' }>;
@@ -102,14 +101,18 @@ describe('JsWorkerHost', () => {
       ["throw new InternalError('out of memory')"],
       ["throw { name: 'InternalError', message: 'out of memory' }"],
       ["throw new InternalError('stack overflow')"],
-      ["throw \"capability 'x' setup failed: {}\""],
+      ['throw "capability \'x\' setup failed: {}"'],
       ["Promise.reject(new InternalError('out of memory'))"],
-    ])('a guest that runs %s does not set exhausted', async (code) => {
-      const { done } = await run(code);
-      expect(done.success).toBe(false);
-      expect(done.timedOut).toBe(false);
-      expect(done.exhausted).toBeUndefined();
-    }, 10_000);
+    ])(
+      'a guest that runs %s does not set exhausted',
+      async (code) => {
+        const { done } = await run(code);
+        expect(done.success).toBe(false);
+        expect(done.timedOut).toBe(false);
+        expect(done.exhausted).toBeUndefined();
+      },
+      10_000,
+    );
 
     const brokenCap: JsCapabilitySnapshot = {
       name: 'broken',
@@ -194,13 +197,17 @@ describe('JsWorkerHost', () => {
       ["throw { name: 'InternalError', message: 'interrupted' }"],
       ["throw new InternalError('interrupted')"],
       ["Promise.reject({ name: 'InternalError', message: 'interrupted' })"],
-    ])('a guest that runs %s does not time out', async (code) => {
-      const { done, output } = await run(code);
-      expect(done.success).toBe(false);
-      expect(done.timedOut).toBe(false);
-      expect(done.error).toMatch(/^InternalError: interrupted/);
-      expect(output).not.toContainEqual(expect.objectContaining({ type: 'system' }));
-    }, 10_000);
+    ])(
+      'a guest that runs %s does not time out',
+      async (code) => {
+        const { done, output } = await run(code);
+        expect(done.success).toBe(false);
+        expect(done.timedOut).toBe(false);
+        expect(done.error).toMatch(/^InternalError: interrupted/);
+        expect(output).not.toContainEqual(expect.objectContaining({ type: 'system' }));
+      },
+      10_000,
+    );
 
     it('is set when the interrupt handler stops a hot loop', async () => {
       const { done } = await run('while (true) {}', { timeoutMs: 100 });
@@ -235,7 +242,12 @@ describe('JsWorkerHost', () => {
         "console.log('12345'); console.warn('abcdefghij'); console.log('more'); 'result'",
         { maxOutputChars: 10 + 2 * C },
       );
-      expect(done).toEqual({ type: 'done', runId: expect.any(Number), success: true, timedOut: false });
+      expect(done).toEqual({
+        type: 'done',
+        runId: expect.any(Number),
+        success: true,
+        timedOut: false,
+      });
       expect(output.map((e) => [e.type, e.content])).toEqual([
         ['log', '12345'],
         ['warn', 'abcdef'],
@@ -299,13 +311,17 @@ describe('JsWorkerHost', () => {
       ['Promise.reject({ toJSON() { for (;;) {} } })'],
       ['Promise.resolve({ toJSON() { for (;;) {} } })'],
       ['throw { toJSON() { for (;;) {} } }'],
-    ])('%s times out', async (code) => {
-      const { done, output } = await run(code, { timeoutMs: 300 });
-      expect(done.success).toBe(false);
-      expect(done.timedOut).toBe(true);
-      expect(done.error).toBe(TIMEOUT_MSG);
-      expect(output.filter((e) => e.type === 'result' || e.type === 'error')).toEqual([]);
-    }, 10_000);
+    ])(
+      '%s times out',
+      async (code) => {
+        const { done, output } = await run(code, { timeoutMs: 300 });
+        expect(done.success).toBe(false);
+        expect(done.timedOut).toBe(true);
+        expect(done.error).toBe(TIMEOUT_MSG);
+        expect(output.filter((e) => e.type === 'result' || e.type === 'error')).toEqual([]);
+      },
+      10_000,
+    );
   });
 
   describe('error limit', () => {
@@ -358,7 +374,12 @@ async function newHost(): Promise<Host> {
     else if (msg.type === 'cap-call') {
       capCalls.push(msg.args);
       queueMicrotask(() =>
-        host.handleMessage({ type: 'cap-result', callId: msg.callId, ok: true, value: msg.args[0] }),
+        host.handleMessage({
+          type: 'cap-result',
+          callId: msg.callId,
+          ok: true,
+          value: msg.args[0],
+        }),
       );
     }
   });
@@ -439,7 +460,10 @@ describe('JsWorkerHost broken flag', () => {
     expect(done.broken).toBe(true);
     expect(done.exhausted).toBeUndefined();
     expect(output.at(-1)).toEqual(
-      expect.objectContaining({ type: 'system', content: expect.stringContaining('failed to free') }),
+      expect.objectContaining({
+        type: 'system',
+        content: expect.stringContaining('failed to free'),
+      }),
     );
   }, 30_000);
 
@@ -473,7 +497,9 @@ describe('JsWorkerHost broken flag', () => {
   it('is set when a free of the runtime throws the error of a missing runtime', async () => {
     const { run } = await newHost();
     vi.spyOn(QuickJSAsyncRuntime.prototype, 'dispose').mockImplementationOnce(() => {
-      throw new Error('QuickJSRuntime(rt = 1) not found when trying to free HostRef(id = -2147483648)');
+      throw new Error(
+        'QuickJSRuntime(rt = 1) not found when trying to free HostRef(id = -2147483648)',
+      );
     });
     const { done } = await run('40 + 2');
     expect(done.success).toBe(false);
@@ -524,8 +550,6 @@ describe('JsWorkerHost runtime free', () => {
 
   it('applies the fix once for each module, and fails for a module of an unknown shape', () => {
     expect(() => fixRuntimeFreeOrder(loaded.modules.at(-1)!)).not.toThrow();
-    expect(() => fixRuntimeFreeOrder({} as QuickJSAsyncWASMModule)).toThrow(
-      /cannot be applied/,
-    );
+    expect(() => fixRuntimeFreeOrder({} as QuickJSAsyncWASMModule)).toThrow(/cannot be applied/);
   });
 });

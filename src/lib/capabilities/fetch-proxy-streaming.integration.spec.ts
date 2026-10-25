@@ -101,8 +101,16 @@ describe('fetch-proxy-streaming integration', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    try { vm.dispose(); } catch { /* ignore */ }
-    try { runtime.dispose(); } catch { /* ignore */ }
+    try {
+      vm.dispose();
+    } catch {
+      /* ignore */
+    }
+    try {
+      runtime.dispose();
+    } catch {
+      /* ignore */
+    }
   });
 
   it('mid-stream abort surfaces as fetch failed: in QuickJS', async () => {
@@ -127,7 +135,9 @@ describe('fetch-proxy-streaming integration', () => {
     const cap = new FetchCapability(makeStubProxyAuth());
     injectCap(vm, cap);
 
-    const val = await evalAndDump(vm, `
+    const val = await evalAndDump(
+      vm,
+      `
       try {
         var resp = fetch('https://example.com/stream');
         resp.text();
@@ -135,7 +145,8 @@ describe('fetch-proxy-streaming integration', () => {
       } catch (e) {
         e.message;
       }
-    `);
+    `,
+    );
 
     expect(val).toBe('fetch failed: stream aborted');
   }, 60_000);
@@ -152,10 +163,13 @@ describe('fetch-proxy-streaming integration', () => {
     const cap = new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: 12 * 1024 * 1024 });
     injectCap(vm, cap);
 
-    const len = await evalAndDump(vm, `
+    const len = await evalAndDump(
+      vm,
+      `
       var resp = fetch('https://example.com/big');
       resp.text().length;
-    `);
+    `,
+    );
 
     expect(len).toBe(payload.length);
   }, 120_000);
@@ -181,9 +195,12 @@ describe('fetch-proxy-streaming integration', () => {
     const cap = new FetchCapability(makeStubProxyAuth());
     injectCap(vm, cap);
 
-    const val = await evalAndDump(vm, `
+    const val = await evalAndDump(
+      vm,
+      `
       try { fetch('https://example.com/endless').text(); 'no error'; } catch (e) { e.message; }
-    `);
+    `,
+    );
 
     expect(String(val)).toContain('fetch failed');
     expect(String(val)).toContain('maxResponseBytes');

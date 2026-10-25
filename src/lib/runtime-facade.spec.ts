@@ -359,7 +359,11 @@ describe('RuntimeFacade — runner map', () => {
 
   it('a rejected initialize() surfaces through initError without an unhandled rejection', async () => {
     const unhandled = vi.fn();
-    const proc = (globalThis as { process?: { on(e: string, fn: () => void): void; off(e: string, fn: () => void): void } }).process;
+    const proc = (
+      globalThis as {
+        process?: { on(e: string, fn: () => void): void; off(e: string, fn: () => void): void };
+      }
+    ).process;
     proc?.on('unhandledRejection', unhandled);
     try {
       foo._ready.set(false);

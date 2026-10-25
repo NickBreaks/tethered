@@ -70,9 +70,7 @@ export class GuestTimers {
     this.running = null;
 
     const makeError = (name: 'TypeError' | 'RangeError', msg: string): QuickJSHandle => {
-      const evalResult = vm.evalCode(
-        `(msg => new ${name}(msg))(${JSON.stringify(msg)})`,
-      );
+      const evalResult = vm.evalCode(`(msg => new ${name}(msg))(${JSON.stringify(msg)})`);
       if (evalResult.error) {
         // This is not expected. Fall back to a generic error
         evalResult.error.dispose();
@@ -81,44 +79,38 @@ export class GuestTimers {
       return evalResult.value as QuickJSHandle;
     };
 
-    const register = (
-      fnName: 'setTimeout' | 'setInterval',
-      isInterval: boolean,
-    ): void => {
-      const fn = vm.newFunction(
-        fnName,
-        (cbHandle?: QuickJSHandle, delayHandle?: QuickJSHandle) => {
-          if (!cbHandle || vm.typeof(cbHandle) !== 'function') {
-            return {
-              error: makeError('TypeError', `${fnName}: callback must be a function`),
-            };
-          }
-          if (this.timers.size >= MAX_PENDING_TIMERS) {
-            return {
-              error: makeError(
-                'RangeError',
-                `${fnName}: too many pending timers (the limit is ${MAX_PENDING_TIMERS})`,
-              ),
-            };
-          }
-          let delay = 0;
-          if (delayHandle && vm.typeof(delayHandle) === 'number') {
-            const n = vm.getNumber(delayHandle);
-            if (Number.isFinite(n) && n > 0) delay = n;
-          }
-          const id = this.nextId++;
-          const dupHandle = cbHandle.dup();
-          const dueTime = this.virtualNow + delay;
-          this.timers.set(id, {
-            id,
-            callback: dupHandle,
-            dueTime,
-            interval: isInterval ? delay : null,
-            cleared: false,
-          });
-          return { value: vm.newNumber(id) };
-        },
-      );
+    const register = (fnName: 'setTimeout' | 'setInterval', isInterval: boolean): void => {
+      const fn = vm.newFunction(fnName, (cbHandle?: QuickJSHandle, delayHandle?: QuickJSHandle) => {
+        if (!cbHandle || vm.typeof(cbHandle) !== 'function') {
+          return {
+            error: makeError('TypeError', `${fnName}: callback must be a function`),
+          };
+        }
+        if (this.timers.size >= MAX_PENDING_TIMERS) {
+          return {
+            error: makeError(
+              'RangeError',
+              `${fnName}: too many pending timers (the limit is ${MAX_PENDING_TIMERS})`,
+            ),
+          };
+        }
+        let delay = 0;
+        if (delayHandle && vm.typeof(delayHandle) === 'number') {
+          const n = vm.getNumber(delayHandle);
+          if (Number.isFinite(n) && n > 0) delay = n;
+        }
+        const id = this.nextId++;
+        const dupHandle = cbHandle.dup();
+        const dueTime = this.virtualNow + delay;
+        this.timers.set(id, {
+          id,
+          callback: dupHandle,
+          dueTime,
+          interval: isInterval ? delay : null,
+          cleared: false,
+        });
+        return { value: vm.newNumber(id) };
+      });
       vm.setProp(vm.global, fnName, fn);
       fn.dispose();
     };
@@ -207,9 +199,7 @@ export class GuestTimers {
     const flushMicrotasks = async (): Promise<'ok' | 'error' | 'timeout'> => {
       while (runtime.hasPendingJob()) {
         if (outOfTime()) return 'timeout';
-        const jobResult = await gate.suspendable(() =>
-          executePendingJobsAsync(runtime, JOB_BATCH),
-        );
+        const jobResult = await gate.suspendable(() => executePendingJobsAsync(runtime, JOB_BATCH));
         const errHandle = jobResult.error;
         if (errHandle) {
           // When the time is out, the interrupt handler stopped the job.
@@ -245,7 +235,7 @@ export class GuestTimers {
           due.push(e);
         }
       }
-      due.sort((a, b) => (a.dueTime - b.dueTime) || (a.id - b.id));
+      due.sort((a, b) => a.dueTime - b.dueTime || a.id - b.id);
 
       // 4. If no timers are due, advance the virtual clock or exit
       if (due.length === 0) {

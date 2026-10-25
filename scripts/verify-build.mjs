@@ -30,7 +30,8 @@ const visit = (file) => {
   if (!existsSync(file)) fail(`${file} is imported but missing`);
   coreFiles.add(file);
   for (const [, spec] of readFileSync(file, 'utf8').matchAll(IMPORT_SPECIFIER)) {
-    if (!spec.startsWith('.')) fail(`${file} imports the package '${spec}'; the core has no dependencies`);
+    if (!spec.startsWith('.'))
+      fail(`${file} imports the package '${spec}'; the core has no dependencies`);
     visit(resolve(dirname(file), spec));
   }
 };
@@ -51,8 +52,11 @@ if (engineLeaks.length > 0) fail(`the engine leaks into public types: ${engineLe
 
 const workerBundle = join(dist, 'js-worker.js');
 if (!existsSync(workerBundle)) fail('dist/js-worker.js is missing');
-const external = [...readFileSync(workerBundle, 'utf8').matchAll(/^\s*import\s.*?from\s*['"]([^'"]+)['"]/gm)];
-if (external.length > 0) fail(`dist/js-worker.js still imports ${external.map((m) => m[1]).join(', ')}`);
+const external = [
+  ...readFileSync(workerBundle, 'utf8').matchAll(/^\s*import\s.*?from\s*['"]([^'"]+)['"]/gm),
+];
+if (external.length > 0)
+  fail(`dist/js-worker.js still imports ${external.map((m) => m[1]).join(', ')}`);
 
 console.log(`verify-build: main entry (${coreFiles.size} modules) is free of worker references`);
 console.log(`verify-build: ${typings.length} .d.ts file(s) are engine-neutral`);

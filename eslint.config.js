@@ -42,10 +42,7 @@ export default tseslint.config(
     files: ['src/index.ts', 'src/lib/**/*.ts'],
     ignores: ['**/*.spec.ts'],
     rules: {
-      'no-restricted-imports': [
-        'error',
-        { patterns: [NO_WORKERS_IN_CORE, NO_PACKAGES_IN_CORE] },
-      ],
+      'no-restricted-imports': ['error', { patterns: [NO_WORKERS_IN_CORE, NO_PACKAGES_IN_CORE] }],
     },
   },
   {

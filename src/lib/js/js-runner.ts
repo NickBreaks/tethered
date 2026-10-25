@@ -471,7 +471,9 @@ export class JsRunner implements CodeRunner {
 
     const enabledNames = enabled.map((c) => c.name);
     const sysMsg =
-      enabledNames.length > 0 ? `[${enabledNames.join(', ')} enabled]` : '[no capabilities enabled]';
+      enabledNames.length > 0
+        ? `[${enabledNames.join(', ')} enabled]`
+        : '[no capabilities enabled]';
     const sysEntry: OutputEntry = { type: 'system', content: sysMsg, timestamp: Date.now() };
     const output: OutputEntry[] = [sysEntry];
     const worker = this.#worker;

@@ -63,7 +63,14 @@ describe('checkWorkerMessage', () => {
         args: ['u'],
         extra: 1,
       },
-      { type: 'cap-call', callId: 3, runId: 1, capability: 'fetch', method: 'request', args: ['u'] },
+      {
+        type: 'cap-call',
+        callId: 3,
+        runId: 1,
+        capability: 'fetch',
+        method: 'request',
+        args: ['u'],
+      },
     ],
     [
       'done',
@@ -75,9 +82,12 @@ describe('checkWorkerMessage', () => {
       { type: 'done', runId: 1, success: true, timedOut: false },
       { type: 'done', runId: 1, success: true, timedOut: false },
     ],
-  ])('accepts a well-formed %s message and rebuilds it from known fields only', (_name, data, msg) => {
-    expect(checkWorkerMessage(data)).toStrictEqual({ ok: true, msg });
-  });
+  ])(
+    'accepts a well-formed %s message and rebuilds it from known fields only',
+    (_name, data, msg) => {
+      expect(checkWorkerMessage(data)).toStrictEqual({ ok: true, msg });
+    },
+  );
 
   it('rejects a non-string init-error message', () => {
     expect(checkWorkerMessage({ type: 'init-error', message: 42 })).toStrictEqual({
@@ -164,12 +174,15 @@ describe('checkWorkerMessage', () => {
       });
     });
 
-    it.each(['true', 1, null, {}])('rejects done with the non-boolean exhausted flag %j', (exhausted) => {
-      expect(checkWorkerMessage({ ...base, exhausted })).toStrictEqual({
-        ok: false,
-        reason: 'malformed done',
-      });
-    });
+    it.each(['true', 1, null, {}])(
+      'rejects done with the non-boolean exhausted flag %j',
+      (exhausted) => {
+        expect(checkWorkerMessage({ ...base, exhausted })).toStrictEqual({
+          ok: false,
+          reason: 'malformed done',
+        });
+      },
+    );
 
     it.each([true, false])('accepts done with broken: %s and keeps it', (broken) => {
       const failed = { ...base, success: false, error: 'E' };

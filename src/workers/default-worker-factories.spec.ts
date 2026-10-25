@@ -15,7 +15,10 @@ describe('default JS worker factory', () => {
     it.each([
       ['defaultJsWorkerFactory', defaultJsWorkerFactory],
       ['createJsWorkerFactory()', createJsWorkerFactory()],
-      ['createJsWorkerFactory({ allowInProcess: false })', createJsWorkerFactory({ allowInProcess: false })],
+      [
+        'createJsWorkerFactory({ allowInProcess: false })',
+        createJsWorkerFactory({ allowInProcess: false }),
+      ],
     ])('%s fails initialize() naming allowInProcess and sets initError', async (_, factory) => {
       const runner = new JsRunner(new CapabilityStore(), { workerFactory: factory });
       try {
@@ -50,7 +53,10 @@ describe('default JS worker factory', () => {
     it.each([
       ['defaultJsWorkerFactory', defaultJsWorkerFactory],
       ['createJsWorkerFactory()', createJsWorkerFactory()],
-      ['createJsWorkerFactory({ allowInProcess: true })', createJsWorkerFactory({ allowInProcess: true })],
+      [
+        'createJsWorkerFactory({ allowInProcess: true })',
+        createJsWorkerFactory({ allowInProcess: true }),
+      ],
     ])('%s spawns a real module Worker', (_, factory) => {
       const worker = factory() as unknown as StubWorker;
       expect(worker).toBeInstanceOf(StubWorker);
