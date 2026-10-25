@@ -86,4 +86,11 @@ export type JsWorkerToMainMsg =
        * retries the run once.
        */
       exhausted?: boolean;
+      /**
+       * True when the engine failed to free a context or a runtime. Then
+       * the WASM module of the worker is broken, and the worker refuses
+       * all later runs. The runner then replaces the worker. It does not
+       * retry the run, because the guest code of the run already ran.
+       */
+      broken?: boolean;
     };

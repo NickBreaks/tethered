@@ -24,7 +24,10 @@ export interface SandboxRuntimeOptions {
    * `'queue'` (run after the older run settles).
    */
   jsConcurrency?: JsRunnerOptions['concurrency'];
-  /** Replace the JS worker every N runs. Off by default. */
+  /**
+   * Replace the JS worker every N runs. This is only a guard against slow
+   * leaks in the WASM heap. Off by default.
+   */
   jsRecycleAfterRuns?: number;
   /**
    * The output limit of each JS run, in characters. Each entry costs its

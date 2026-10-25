@@ -123,6 +123,18 @@ export function normalizePath(path: string): string {
   return '/' + segments.join('/');
 }
 
+/**
+ * Makes the record key of a file from a guest argument. It throws for a
+ * path that normalizes to the root `/`, for example `''`, `.` or `/..`.
+ * `listFiles` never shows a file at the root key. Thus a guest cannot
+ * use that key to hide a file.
+ */
+function filePath(arg: unknown): string {
+  const path = normalizePath(String(arg));
+  if (path === '/') throw new Error("EINVAL: invalid path: a file path must not be the root '/'");
+  return path;
+}
+
 export class DiskCapability implements SandboxCapability {
   readonly name = 'disk';
   readonly description = 'Virtual file system via IndexedDB';
@@ -141,12 +153,12 @@ export class DiskCapability implements SandboxCapability {
   async invokeHost(method: string, args: unknown[]): Promise<unknown> {
     switch (method) {
       case 'writeFile': {
-        const path = normalizePath(String(args[0]));
+        const path = filePath(args[0]);
         await this.backend.write(path, String(args[1]));
         return undefined;
       }
       case 'readFile': {
-        const path = normalizePath(String(args[0]));
+        const path = filePath(args[0]);
         const content = await this.backend.read(path);
         if (content === undefined) {
           throw new Error(`ENOENT: no such file: '${path}'`);
@@ -154,14 +166,18 @@ export class DiskCapability implements SandboxCapability {
         return content;
       }
       case 'listFiles': {
+        // listFiles() with no argument lists the root. This is the only
+        // path argument that does not go through String().
         const dirPath = args[0] === undefined ? '/' : normalizePath(String(args[0]));
         const allPaths = await this.backend.list();
         const prefix = dirPath === '/' ? '/' : dirPath + '/';
 
         // Find direct children of the directory
         const children = new Set<string>();
-        for (const filePath of allPaths) {
-          if (!filePath.startsWith(prefix)) continue;
+        for (const filePath of allPaths as unknown[]) {
+          // The host can write keys that are not strings, for example
+          // numbers in IndexedDB. The guest cannot use them. Skip them.
+          if (typeof filePath !== 'string' || !filePath.startsWith(prefix)) continue;
           const relative = filePath.slice(prefix.length);
           if (!relative) continue;
           const slashIdx = relative.indexOf('/');

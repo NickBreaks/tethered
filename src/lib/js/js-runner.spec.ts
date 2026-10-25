@@ -9,7 +9,7 @@ import { DiskCapability, MapDiskBackend } from '../capabilities/disk-capability.
 import { TimerCapability } from '../capabilities/timer-capability.js';
 import type { SandboxCapability } from '../capabilities/capability.js';
 import type { OutputEntry } from '../shared/sandbox-types.js';
-import { OUTPUT_ENTRY_COST } from './worker-protocol.js';
+import { MAX_ERROR_CHARS, OUTPUT_ENTRY_COST } from './worker-protocol.js';
 
 const stubProxyAuth = {
   proxyBase: () => null,
@@ -251,7 +251,65 @@ describe('JsRunner', () => {
       const result = await service.execute('testGlobal(1, "a")');
       expect(result.success).toBe(true);
       expect(resultsOf(result.output)).toEqual(['custom-works']);
-      expect(invokeHost).toHaveBeenCalledWith('testGlobal', [1, 'a']);
+      expect(invokeHost).toHaveBeenCalledWith('testGlobal', [1, 'a'], {
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    // A capability can throw any value. The runner must always reply, so
+    // the guest gets an error at once and does not wait for the backstop.
+    describe('host call errors that do not convert to a string', () => {
+      const badMessage = (get: () => unknown) => {
+        const e = new Error('x');
+        Object.defineProperty(e, 'message', { get });
+        return e;
+      };
+      it.each([
+        ['a null-prototype object', () => Object.create(null) as unknown],
+        ['an Error with a message getter that throws', () => badMessage(() => {
+          throw new Error('getter');
+        })],
+        ['an Error with a message that is not a string', () => badMessage(() => 42)],
+        ['an object whose toString throws', () => ({
+          toString() {
+            throw new Error('toString');
+          },
+        })],
+      ])('replies "host call failed" for %s', async (_label, make) => {
+        registry.register({
+          name: 'boom',
+          description: 'throws a bad value',
+          stubInfo: { name: 'boom', type: 'function' },
+          invokeHost: async () => {
+            throw make();
+          },
+        });
+        registry.setEnabled('boom', true);
+        service.timeoutMs = 3000;
+        const t0 = Date.now();
+        const result = await service.execute(
+          '(async () => { try { await boom(); return "no error"; } catch (e) { return e.message; } })()',
+        );
+        expect(Date.now() - t0).toBeLessThan(2000);
+        expect(result.success).toBe(true);
+        expect(resultsOf(result.output)).toEqual(['host call failed']);
+      });
+
+      it('cuts a long host error message to MAX_ERROR_CHARS', async () => {
+        registry.register({
+          name: 'boom',
+          description: 'throws a long message',
+          stubInfo: { name: 'boom', type: 'function' },
+          invokeHost: async () => {
+            throw new Error('a'.repeat(MAX_ERROR_CHARS + 500));
+          },
+        });
+        registry.setEnabled('boom', true);
+        const result = await service.execute(
+          '(async () => { try { await boom(); } catch (e) { return e.message.length; } })()',
+        );
+        expect(resultsOf(result.output)).toEqual([String(MAX_ERROR_CHARS)]);
+      });
     });
 
     // Test 39: System message shows enabled capabilities

@@ -48,7 +48,7 @@ the top level to `createSandboxRuntime()`:
 | `JsRunnerOptions` | `createSandboxRuntime` | Default | Effect |
 | --- | --- | --- | --- |
 | `concurrency` | `jsConcurrency` | `'supersede'` | `'supersede'`: an overlapping run replaces the current run, on a fresh worker (refer to the subsequent text). `'queue'`: each run starts after all earlier runs settle (finish, fail, time out or abort). |
-| `recycleAfterRuns` | `jsRecycleAfterRuns` | off | After N runs on one worker, the next run first replaces the worker. |
+| `recycleAfterRuns` | `jsRecycleAfterRuns` | off | After N runs on one worker, the next run first replaces the worker. The worker frees the runtime of each run. Thus this option is only a guard against slow leaks, for example from the fragmentation of the WASM heap. |
 | `maxOutputChars` | `jsMaxOutputChars` | `1048576` | The output limit of each run, in characters. Each entry costs the characters (UTF-16 code units) of its `content` plus a fixed cost of 64 characters. Thus the default limit keeps a maximum of 16384 entries. All entries from the worker count. The system entries of the runner do not count. The runner drops the entry that goes over the limit and all later output of the run. In their place, it adds one system entry: `Output limit reached (N characters). The runner dropped the remaining output.` The run continues. The value must be a safe integer greater than 0. Else the constructor throws a `RangeError`. The `error` of a run has a separate limit of 10000 characters. |
 | `recoverExhaustion` | `jsRecoverExhaustion` | `true` | If the worker reports that its heap is spent (refer to the subsequent text), the runner replaces the worker and tries the run one more time. It does not try again when the run called `invokeHost()` of a capability, because a second try does those side effects again. If the second try fails in the same way, the runner replaces the worker again and returns that failure. |
 
@@ -68,14 +68,24 @@ fetch, a storage write or a disk write never occurs two times because of a
 retry. A host call that the host refused before `invokeHost()` (a disabled
 capability or an unknown method) does not prevent the retry.
 
+**Broken engine.** The engine can fail to free the runtime of a run. In
+practice, this occurs after an overflow of the stack of the browser, for
+example from a deep recursion or from deeply nested source in `eval()`.
+A stack overflow that the engine catches does not break the engine
+(refer to the stack limit in [threat model](threat-model.md)). Then the state of
+the engine is not known. The worker sets the `broken` flag of its `done` message, and it
+refuses all later runs. The runner always replaces the worker, also when
+`recoverExhaustion` is `false`. The run is not a success. The runner does
+not retry the run, because its guest code already ran.
+
 JS-only subscriptions and state:
 
 - `onRun(fn)`: gets `{ tag, startTime, timeoutMs }` when a run starts,
   and `null` when it ends (finished, timed out or aborted). A second try
   after memory exhaustion gives a second start/end pair.
 - `onRecycle(fn)`: when the runner replaces the worker, it calls `fn` with
-  `'periodic'` (`recycleAfterRuns`) or with the error message of the run
-  (exhaustion). When abort or a timeout starts a new worker, the runner
+  `'periodic'` (`recycleAfterRuns`), with `'broken'` (broken engine) or
+  with the error message of the run (exhaustion). When abort or a timeout starts a new worker, the runner
   does not call `fn`.
 - `queued: ReadableValue<number>`: the number of runs that wait after the
   run in flight. It is always 0 in `'supersede'` mode.

@@ -4,7 +4,87 @@ import type {
   QuickJSHandle,
 } from 'quickjs-emscripten-core';
 import type { CapabilityStubInfo } from '../lib/capabilities/capability.js';
-import type { SuspendGate } from './engine-async.js';
+import { TIMEOUT_MSG } from '../lib/js/worker-protocol.js';
+import { dumpJson, type SuspendGate } from './engine-async.js';
+
+/**
+ * The maximum size of the arguments of one host call, in characters. Each
+ * string argument counts with its length. Each other object counts with
+ * the length of its JSON from the engine. The bridge examines the JSON
+ * before it parses it. Thus a large object graph, for example an array
+ * that holds one object many times, does not expand in the worker. A call
+ * over this limit fails with a guest error and does not go to the main
+ * thread.
+ */
+export const MAX_HOST_CALL_ARG_CHARS = 16 * 1024 * 1024;
+
+/** The arguments of a host call are larger than MAX_HOST_CALL_ARG_CHARS. */
+class ArgsTooLarge extends Error {}
+
+/**
+ * Reads the arguments of a host call into plain values, as `vm.dump()`
+ * does. Stops with ArgsTooLarge when the arguments are larger than `max`
+ * characters. The engine can call guest code (`toJSON`).
+ */
+function dumpArgs(vm: QuickJSAsyncContext, handles: QuickJSHandle[], max: number): unknown[] {
+  let used = 0;
+  const charge = (chars: number): void => {
+    used += chars;
+    if (used > max) throw new ArgsTooLarge();
+  };
+  const dumpOne = (handle: QuickJSHandle): unknown => {
+    const type = vm.typeof(handle);
+    if (type === 'string') {
+      // Examine the length before the string is copied into the worker.
+      // `getLength()` accepts only objects, thus read the property.
+      const length = vm.getProp(handle, 'length');
+      try {
+        charge(vm.getNumber(length));
+      } finally {
+        length.dispose();
+      }
+      return vm.getString(handle);
+    }
+    if (type === 'number') return vm.getNumber(handle);
+    if (type === 'undefined') return undefined;
+    // The worker copies a bigint or a symbol before it measures it, as it
+    // does for JSON. The memory limit of the engine bounds that copy.
+    if (type === 'bigint') {
+      const value = vm.getBigInt(handle);
+      charge(value.toString().length);
+      return value;
+    }
+    if (type === 'symbol') {
+      const value = vm.getSymbol(handle);
+      charge(value.description?.length ?? 0);
+      return value;
+    }
+    const state = vm.getPromiseState(handle);
+    if (state.type === 'pending') return { type: 'pending' };
+    if (state.type === 'rejected') {
+      try {
+        return { type: 'rejected', error: dumpOne(state.error) };
+      } finally {
+        if (state.error.alive) state.error.dispose();
+      }
+    }
+    if (!state.notAPromise) {
+      try {
+        return { type: 'fulfilled', value: dumpOne(state.value) };
+      } finally {
+        if (state.value.alive) state.value.dispose();
+      }
+    }
+    const text = dumpJson(vm, handle);
+    charge(text.length);
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return text;
+    }
+  };
+  return handles.map(dumpOne);
+}
 
 interface CapabilityBridgeSpec {
   name: string;
@@ -22,13 +102,15 @@ interface CapabilityBridgeSpec {
  * call invokeHost directly.
  *
  * A call fails with a guest error when `gate` tells that the engine cannot
- * suspend.
+ * suspend, when its arguments are larger than MAX_HOST_CALL_ARG_CHARS, or
+ * when `inTime` returns false before the bridge reads the arguments.
  */
 export function injectCapabilityBridge(
   vm: QuickJSAsyncContext,
   spec: CapabilityBridgeSpec,
   invoke: (method: string, args: unknown[]) => Promise<unknown>,
   gate: SuspendGate,
+  inTime: () => boolean = () => true,
 ): void {
   const makeBridgeFn = (fnName: string): QuickJSHandle =>
     // The engine also accepts a result that is not a promise. Then the
@@ -44,10 +126,23 @@ export function injectCapabilityBridge(
           ),
         };
       }
+      // Do not read the arguments after the deadline. The read can be
+      // slow, and the run is out of time.
+      if (!inTime()) return { error: vm.newError(TIMEOUT_MSG) };
       // Dumping an argument can call guest code (toJSON). A host call
       // from that code cannot suspend, thus the gate is closed for it.
-      const dumpArgs = (): unknown[] => handles.map((h) => vm.dump(h));
-      const args = gate.hostOnly(dumpArgs);
+      let args: unknown[];
+      try {
+        args = gate.hostOnly(() => dumpArgs(vm, handles, MAX_HOST_CALL_ARG_CHARS));
+      } catch (e) {
+        if (!(e instanceof ArgsTooLarge)) throw e;
+        return {
+          error: vm.newError({
+            name: 'RangeError',
+            message: `${fnName}(): the host call arguments exceed ${MAX_HOST_CALL_ARG_CHARS} characters`,
+          }),
+        };
+      }
       return relay(fnName, args);
     }) as AsyncFunctionImplementation);
 

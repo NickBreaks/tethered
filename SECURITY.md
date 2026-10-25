@@ -29,10 +29,11 @@ While tethered is 0.x, only the latest minor release gets security fixes.
 
 ## Reporting a vulnerability
 
-Report security issues privately through the GitHub private vulnerability
-reports. Open the **Security** tab of the repository and select **Report a
-vulnerability**. Do not open a public issue, pull request or discussion
-for a vulnerability.
+Report security issues privately. Do not open a public issue, pull
+request or discussion for a vulnerability. The repository is not public
+yet. When it is public, use the GitHub private vulnerability reports:
+open the **Security** tab of the repository and select **Report a
+vulnerability**.
 
 Include:
 
@@ -41,6 +42,7 @@ Include:
 - what the guest got: host state that it read or changed, a side effect
   without a capability, the proxy token, or a limit that it went around.
 
-The maintainer will reply to the report, work on a fix, and agree a
-disclosure date with you. For issues outside the claim, open a usual bug
-report.
+Also use the private report for an escape from QuickJS, the WASM runtime
+or the browser, and tell the upstream project. The maintainer will reply
+to the report, work on a fix, and agree a disclosure date with you. For
+other issues outside the claim, open a usual bug report.

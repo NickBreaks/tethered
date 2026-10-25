@@ -1,4 +1,4 @@
-import type { SandboxCapability, CapabilityStubInfo } from './capability.js';
+import type { SandboxCapability, CapabilityStubInfo, HostCallContext } from './capability.js';
 import type { ProxyAuthLike } from '../proxy/proxy-auth.js';
 
 /**
@@ -47,6 +47,12 @@ const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 const PROXY_ERROR_HEADER = 'X-Proxy-Error';
 const PROXY_ERROR_UNAUTHORIZED = 'unauthorized';
 
+/** The error when the proxy URL is not valid. It does not show the URL. */
+const PROXY_URL_INVALID_MSG = 'Proxy fetch failed: the CORS proxy URL is not a valid URL.';
+
+/** The error when the host fetch error shows the proxy URL or the token. */
+const PROXY_REQUEST_FAILED_MSG = 'Proxy fetch failed: the request to the CORS proxy failed.';
+
 /** A normalized host list: exact hostnames plus `*.` wildcard suffixes. */
 interface HostList {
   readonly exact: ReadonlySet<string>;
@@ -91,9 +97,11 @@ interface HostList {
  *
  * Body and cancel: the host reads the response body as a stream and
  * counts the bytes. A body larger than `maxResponseBytes` fails the
- * request. Each request has an AbortController. `cleanup()` aborts all
- * requests in flight. The runner calls it when a run ends, also when a
- * run is aborted, times out or is superseded.
+ * request. Each request has an AbortController. The request aborts when
+ * the signal of its host call aborts. The runner aborts this signal when
+ * the run of the call ends, also when the run is aborted, times out or
+ * is superseded. Thus the end of a run does not abort the requests of
+ * other runs, also when two runners share one capability object.
  *
  * Token-isolation invariant: the auth header is read only INSIDE
  * invokeHost, on the main thread. It never crosses the worker boundary.
@@ -149,8 +157,6 @@ export class FetchCapability implements SandboxCapability {
   readonly #allow: HostList | null;
   readonly #deny: HostList | null;
   readonly #maxResponseBytes: number;
-  /** One controller for each request in flight. `cleanup()` aborts them. */
-  readonly #inFlight = new Set<AbortController>();
 
   constructor(
     private readonly proxyAuth: ProxyAuthLike,
@@ -171,15 +177,27 @@ export class FetchCapability implements SandboxCapability {
       throw new TypeError('FetchCapability maxResponseBytes must be a positive integer.');
     }
     this.#maxResponseBytes = maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+    // The client sends the proxy URL in each request. Credentials in it
+    // can go to logs and error messages. A URL that does not parse makes
+    // each proxy call fail, and the parser error can show the URL. The
+    // errors here do not show the URL.
+    const base = proxyAuth.proxyBase();
+    if (base !== null) {
+      const endpoint = proxyEndpoint(base);
+      if (endpoint === null) {
+        throw new TypeError('FetchCapability corsProxyUrl must be a valid URL.');
+      }
+      if (hasUserInfo(endpoint)) {
+        throw new TypeError('FetchCapability corsProxyUrl must not contain a user name or a password.');
+      }
+    }
   }
 
-  /** Aborts all requests in flight. The runner calls this when a run ends. */
-  cleanup(): void {
-    for (const controller of this.#inFlight) controller.abort();
-    this.#inFlight.clear();
-  }
-
-  async invokeHost(method: string, args: unknown[]): Promise<unknown> {
+  /**
+   * Does one guest request. When `context.signal` aborts, the request
+   * aborts. The runner aborts it when the run of the call ends.
+   */
+  async invokeHost(method: string, args: unknown[], context?: HostCallContext): Promise<unknown> {
     if (method !== 'fetch') {
       throw new Error(`fetch.${method} is not implemented`);
     }
@@ -196,7 +214,10 @@ export class FetchCapability implements SandboxCapability {
     }
 
     const controller = new AbortController();
-    this.#inFlight.add(controller);
+    const runSignal = context?.signal;
+    const onRunEnd = () => controller.abort();
+    if (runSignal?.aborted) onRunEnd();
+    runSignal?.addEventListener('abort', onRunEnd);
     try {
       const response = await this.doFetch(this.checkHost(url), options, controller.signal);
       const bodyText = await this.readBody(response, controller.signal);
@@ -210,7 +231,7 @@ export class FetchCapability implements SandboxCapability {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`fetch failed: ${msg}`);
     } finally {
-      this.#inFlight.delete(controller);
+      runSignal?.removeEventListener('abort', onRunEnd);
     }
   }
 
@@ -300,7 +321,12 @@ export class FetchCapability implements SandboxCapability {
   }
 
   private async doFetch(target: URL, init: RequestInit, signal: AbortSignal): Promise<Response> {
-    const base = this.proxyAuth.proxyBase();
+    let base: string | null;
+    try {
+      base = this.proxyAuth.proxyBase();
+    } catch {
+      throw new Error(PROXY_URL_INVALID_MSG);
+    }
     const url = target.href;
     const options: RequestInit = { ...init, signal };
 
@@ -317,7 +343,15 @@ export class FetchCapability implements SandboxCapability {
       return globalThis.fetch(url, options);
     }
 
-    // Case 3: cross-origin -> route through proxy
+    // Case 3: cross-origin -> route through proxy. The constructor examined
+    // the proxy URL, but a ProxyAuthLike can return a different URL on
+    // each call. Thus examine it again before the token is read. The
+    // errors do not show the URL.
+    const endpoint = proxyEndpoint(base);
+    if (endpoint === null) throw new Error(PROXY_URL_INVALID_MSG);
+    if (hasUserInfo(endpoint)) {
+      throw new Error('Proxy fetch failed: the CORS proxy URL must not contain a user name or a password.');
+    }
     const authHeader = this.proxyAuth.authHeader();
     if (authHeader === null) {
       this.proxyAuth.invalidate();
@@ -331,9 +365,10 @@ export class FetchCapability implements SandboxCapability {
     // the token goes to that host. An empty base gives the same-origin
     // path '/proxy/fetch'. A relative base resolves against the page
     // location, not against a `<base>` element. Thus the token stays on
-    // the origin of the page.
+    // the origin of the page. proxyEndpoint() parsed this URL with the
+    // same base, thus it parses.
     const proxyUrl = resolveAgainstPage(`${base.replace(/\/+$/, '')}/proxy/fetch`);
-    const proxyResponse = await globalThis.fetch(proxyUrl, {
+    const proxyResponse = await this.proxyFetch(proxyUrl, [proxyUrl, endpoint.href, authHeader], {
       signal,
       method: 'POST',
       // The browser keeps custom headers on a redirect, also to a different
@@ -361,6 +396,30 @@ export class FetchCapability implements SandboxCapability {
 
     return proxyResponse;
   }
+
+  /**
+   * Calls `globalThis.fetch` for the proxy. An error message from the
+   * host fetch can contain the proxy URL or the auth header. When the
+   * message contains one of `secrets`, this method throws a fixed error
+   * instead. Thus the guest never sees the proxy URL or the token.
+   */
+  private async proxyFetch(url: string, secrets: string[], init: RequestInit): Promise<Response> {
+    try {
+      return await globalThis.fetch(url, init);
+    } catch (err) {
+      let text: string;
+      try {
+        text = err instanceof Error ? String(err.message) : String(err);
+      } catch {
+        throw new Error(PROXY_REQUEST_FAILED_MSG);
+      }
+      const parts = secrets.flatMap((v) => [v, v.replace(/^Bearer\s+/, '')]);
+      if (parts.some((v) => v !== '' && text.includes(v))) {
+        throw new Error(PROXY_REQUEST_FAILED_MSG);
+      }
+      throw err;
+    }
+  }
 }
 
 /**
@@ -378,6 +437,31 @@ function pageBaseUrl(): string | undefined {
 function resolveAgainstPage(url: string): string {
   const href = globalThis.location?.href;
   return href === undefined ? url : new URL(url, href).href;
+}
+
+/**
+ * The proxy endpoint for `base`: `/proxy/fetch` under `base`, with the
+ * trailing slashes of `base` removed. A relative base resolves against
+ * `location.href`, not against a `<base>` element. Where there is no
+ * location, it resolves against `http://localhost/`. Returns null when
+ * `base` is not a string or the result does not parse. This function
+ * never throws.
+ */
+function proxyEndpoint(base: unknown): URL | null {
+  if (typeof base !== 'string') return null;
+  try {
+    return new URL(
+      `${base.replace(/\/+$/, '')}/proxy/fetch`,
+      globalThis.location?.href ?? 'http://localhost/',
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** True when `url` has a user name or a password. */
+function hasUserInfo(url: URL): boolean {
+  return url.username !== '' || url.password !== '';
 }
 
 function stripTrailingDot(host: string): string {

@@ -90,7 +90,7 @@ function withDemoFiles(fetchCap: FetchCapability): SandboxCapability {
     description: fetchCap.description,
     stubInfo: fetchCap.stubInfo,
     setupScript: fetchCap.setupScript,
-    async invokeHost(method, args) {
+    async invokeHost(method, args, context) {
       let url: URL | null = null;
       try {
         url = new URL(String(args[0]), location.href);
@@ -100,10 +100,10 @@ function withDemoFiles(fetchCap: FetchCapability): SandboxCapability {
       if (url?.origin === location.origin && !url.pathname.startsWith(demoDir.pathname)) {
         throw new Error(`fetch failed: only the files of the demo (${demoDir.pathname}) are allowed on this host.`);
       }
-      return fetchCap.invokeHost(method, args);
+      // Stop and the time limit abort the signal of the run. Then the
+      // requests of the run abort.
+      return fetchCap.invokeHost(method, args, context);
     },
-    // Stop and the time limit abort the requests in flight.
-    cleanup: () => fetchCap.cleanup(),
   };
 }
 

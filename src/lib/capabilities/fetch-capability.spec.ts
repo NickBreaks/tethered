@@ -1001,7 +1001,7 @@ describe('FetchCapability', () => {
   // Response size limit and cancel of requests in flight.
   // ---------------------------------------------------------------
 
-  describe('maxResponseBytes and cleanup()', () => {
+  describe('maxResponseBytes and the run signal', () => {
     function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
       const enc = new TextEncoder();
       let i = 0;
@@ -1084,11 +1084,115 @@ describe('FetchCapability', () => {
       },
     );
 
+    it.each([
+      ['https://user:secret@proxy.example'],
+      ['https://user@proxy.example/base'],
+      ['https://:secret@proxy.example'],
+      ['//user:secret@proxy.example'],
+    ])('a corsProxyUrl with a user name or a password (%s) throws a TypeError at construction', (base) => {
+      const make = () => new FetchCapability(makeStubProxyAuth({ proxyBase: () => base }));
+      expect(make).toThrow(
+        new TypeError('FetchCapability corsProxyUrl must not contain a user name or a password.'),
+      );
+    });
+
+    it.each([['https://u:p@ho st'], ['https://ho st'], ['http://[::1']])(
+      'a corsProxyUrl that does not parse (%s) throws a TypeError without the URL',
+      (base) => {
+        const make = () => new FetchCapability(makeStubProxyAuth({ proxyBase: () => base }));
+        expect(make).toThrow(new TypeError('FetchCapability corsProxyUrl must be a valid URL.'));
+      },
+    );
+
+    describe('a proxyBase that changes after construction', () => {
+      const makeChanging = (later: unknown) => {
+        let base: unknown = 'https://proxy.example.com';
+        const authHeader = vi.fn(() => `Bearer ${TOKEN}`);
+        const cap = new FetchCapability(
+          makeStubProxyAuth({ proxyBase: () => base as string | null, authHeader }),
+        );
+        base = later;
+        return { cap, authHeader };
+      };
+
+      it.each([
+        ['https://u:p@ho st', 'Proxy fetch failed: the CORS proxy URL is not a valid URL.'],
+        [42, 'Proxy fetch failed: the CORS proxy URL is not a valid URL.'],
+        [
+          'https://user:secret@proxy.example.com',
+          'Proxy fetch failed: the CORS proxy URL must not contain a user name or a password.',
+        ],
+      ])('a proxy call to %o is refused before the token is read', async (later, text) => {
+        const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+        globalThis.fetch = spy;
+        const { cap, authHeader } = makeChanging(later);
+        const err = await cap.invokeHost('fetch', ['https://api.example.com/data']).catch((e) => e);
+        expect(err).toBeInstanceOf(Error);
+        expect((err as Error).message).toBe(`fetch failed: ${text}`);
+        expect((err as Error).message).not.toContain('secret');
+        expect(spy).not.toHaveBeenCalled();
+        expect(authHeader).not.toHaveBeenCalled();
+      });
+
+      it('a proxyBase() that throws gives a fixed error', async () => {
+        const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+        globalThis.fetch = spy;
+        const cap = new FetchCapability(makeStubProxyAuth({ proxyBase: () => null }));
+        let calls = 0;
+        (cap as unknown as { proxyAuth: { proxyBase: () => string } }).proxyAuth.proxyBase = () => {
+          calls++;
+          throw new Error('https://user:secret@proxy.example.com');
+        };
+        await expect(cap.invokeHost('fetch', ['https://api.example.com/data'])).rejects.toThrow(
+          new Error('fetch failed: Proxy fetch failed: the CORS proxy URL is not a valid URL.'),
+        );
+        expect(calls).toBe(1);
+        expect(spy).not.toHaveBeenCalled();
+      });
+    });
+
+    it.each([
+      ['the proxy URL', () => 'request to https://proxy.example.com/proxy/fetch failed'],
+      ['the token', () => `bad header Bearer ${TOKEN}`],
+      ['the bare token', () => `bad value ${TOKEN}`],
+    ])('a host fetch error that shows %s becomes a fixed error', async (_label, text) => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new TypeError(text()));
+      const cap = new FetchCapability(
+        makeStubProxyAuth({
+          proxyBase: () => 'https://proxy.example.com',
+          authHeader: () => `Bearer ${TOKEN}`,
+        }),
+      );
+      await expect(cap.invokeHost('fetch', ['https://api.example.com/data'])).rejects.toThrow(
+        new Error('fetch failed: Proxy fetch failed: the request to the CORS proxy failed.'),
+      );
+    });
+
+    it('a host fetch error without the proxy URL or the token passes unchanged', async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+      const cap = new FetchCapability(
+        makeStubProxyAuth({
+          proxyBase: () => 'https://proxy.example.com',
+          authHeader: () => `Bearer ${TOKEN}`,
+        }),
+      );
+      await expect(cap.invokeHost('fetch', ['https://api.example.com/data'])).rejects.toThrow(
+        new Error('fetch failed: Failed to fetch'),
+      );
+    });
+
+    it.each([[null], [''], ['/api'], ['https://proxy.example/'], ['https://proxy.example/a@b']])(
+      'a corsProxyUrl without credentials (%o) is accepted',
+      (base) => {
+        expect(() => new FetchCapability(makeStubProxyAuth({ proxyBase: () => base }))).not.toThrow();
+      },
+    );
+
     it('a maxResponseBytes of 1 is accepted', () => {
       expect(() => new FetchCapability(makeStubProxyAuth(), { maxResponseBytes: 1 })).not.toThrow();
     });
 
-    it('cleanup() aborts every request in flight (direct and proxy)', async () => {
+    it('the run signal aborts every request of the run in flight (direct and proxy)', async () => {
       const signals: AbortSignal[] = [];
       globalThis.fetch = vi.fn().mockImplementation(
         (_url: string, init: RequestInit) =>
@@ -1100,23 +1204,24 @@ describe('FetchCapability', () => {
       );
       const direct = new FetchCapability(makeStubProxyAuth());
       const proxied = new FetchCapability(proxyAuthWithToken());
+      const run = new AbortController();
+      const context = { signal: run.signal };
 
       const calls = [
-        direct.invokeHost('fetch', ['https://a.example/']),
-        direct.invokeHost('fetch', ['https://b.example/']),
-        proxied.invokeHost('fetch', ['https://c.example/']),
+        direct.invokeHost('fetch', ['https://a.example/'], context),
+        direct.invokeHost('fetch', ['https://b.example/'], context),
+        proxied.invokeHost('fetch', ['https://c.example/'], context),
       ];
       await vi.waitFor(() => expect(signals).toHaveLength(3));
       expect(signals.some((s) => s.aborted)).toBe(false);
 
-      direct.cleanup();
-      proxied.cleanup();
+      run.abort();
 
       expect(signals.every((s) => s.aborted)).toBe(true);
       for (const call of calls) await expect(call).rejects.toThrow(/fetch failed/);
     });
 
-    it('cleanup() also stops a body read that is in progress', async () => {
+    it('the run signal also stops a body read that is in progress', async () => {
       // The body never ends, and it ignores the signal. Only a cancel of
       // the reader can stop the read.
       let cancelled = false;
@@ -1136,15 +1241,16 @@ describe('FetchCapability', () => {
       });
       globalThis.fetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
       const cap = new FetchCapability(makeStubProxyAuth());
-      const call = cap.invokeHost('fetch', ['https://example.com/']);
+      const run = new AbortController();
+      const call = cap.invokeHost('fetch', ['https://example.com/'], { signal: run.signal });
       // Wait until the host reads the body. Then the read is in progress.
       await vi.waitFor(() => expect(pulls).toBeGreaterThan(0));
-      cap.cleanup();
+      run.abort();
       await expect(call).rejects.toThrow(/fetch failed/);
       expect(cancelled).toBe(true);
     }, 10_000);
 
-    it('cleanup() before the response arrives cancels the body of a fetch that ignores the signal', async () => {
+    it('the run signal before the response arrives cancels the body of a fetch that ignores the signal', async () => {
       // The fetch function ignores the signal, and the body never ends.
       // Without a check of the signal before the read, the read waits
       // forever.
@@ -1157,13 +1263,55 @@ describe('FetchCapability', () => {
       let respond!: (r: Response) => void;
       globalThis.fetch = vi.fn(() => new Promise<Response>((r) => (respond = r)));
       const cap = new FetchCapability(makeStubProxyAuth());
-      const call = cap.invokeHost('fetch', ['https://example.com/']);
+      const run = new AbortController();
+      const call = cap.invokeHost('fetch', ['https://example.com/'], { signal: run.signal });
       await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
-      cap.cleanup();
+      run.abort();
       respond(new Response(body, { status: 200 }));
       await expect(call).rejects.toThrow('fetch failed: the request was aborted.');
       expect(cancelled).toBe(true);
     }, 10_000);
+
+    it('the end of one run does not abort the requests of another run on the same capability', async () => {
+      const byUrl = new Map<string, AbortSignal>();
+      let finish!: () => void;
+      globalThis.fetch = vi.fn().mockImplementation(
+        (url: string, init: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            byUrl.set(url, init.signal!);
+            init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+            if (url.includes('b.example')) finish = () => resolve(new Response('b', { status: 200 }));
+          }),
+      );
+      // One capability object, registered in two runtimes.
+      const cap = new FetchCapability(makeStubProxyAuth());
+      const runA = new AbortController();
+      const runB = new AbortController();
+      const callA = cap.invokeHost('fetch', ['https://a.example/'], { signal: runA.signal });
+      const callB = cap.invokeHost('fetch', ['https://b.example/'], { signal: runB.signal });
+      await vi.waitFor(() => expect(byUrl.size).toBe(2));
+
+      runA.abort();
+      await expect(callA).rejects.toThrow(/fetch failed/);
+      expect(byUrl.get('https://b.example/')!.aborted).toBe(false);
+      finish();
+      expect(JSON.parse(String(await callB)).body).toBe('b');
+    });
+
+    it('a request whose run signal already aborted does not start a read', async () => {
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url: string, init: RequestInit) =>
+          init.signal!.aborted
+            ? Promise.reject(new DOMException('aborted', 'AbortError'))
+            : Promise.resolve(new Response('x', { status: 200 })),
+      );
+      const cap = new FetchCapability(makeStubProxyAuth());
+      const run = new AbortController();
+      run.abort();
+      await expect(
+        cap.invokeHost('fetch', ['https://example.com/'], { signal: run.signal }),
+      ).rejects.toThrow(/fetch failed/);
+    });
   });
 
   // ---------------------------------------------------------------

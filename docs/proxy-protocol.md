@@ -27,6 +27,13 @@ against a `<base>` element. Thus a base that is empty or starts with one
 (`//proxy.example.com`) is a different host. To use a different host,
 write the full absolute URL.
 
+Do not put credentials in `corsProxyUrl`. The `FetchCapability`
+constructor throws a `TypeError` for a proxy URL with a user name or a
+password. It also throws for a proxy URL that does not parse. An empty
+base and a relative base parse. The capability examines
+`proxyBase()` again on each proxy call. The errors that the guest gets do
+not show the proxy URL or the token.
+
 A same-origin proxy gets more than the token. Refer to
 [Same-origin proxy](#same-origin-proxy).
 
@@ -104,7 +111,8 @@ get the response headers. Over HTTP/2 and HTTP/3, `statusText` is empty.
 The client reads the body as a stream and counts the bytes. If the body
 is larger than `maxResponseBytes` (default 10 MiB), the client cancels
 the stream and the `fetch` of the guest fails. When a run ends, the
-client aborts all requests of the run that are in flight.
+client aborts all requests of the run that are in flight. It does not
+abort the requests of other runs.
 
 | Status | Meaning | What the client does |
 | --- | --- | --- |
@@ -176,10 +184,27 @@ A proxy MUST:
 - send no header of the destination response to the client, other than
   `Content-Type`. The client does not read other headers. Headers such as
   `Set-Cookie` and `Clear-Site-Data` can change the state of the host
-  page (refer to [Same-origin proxy](#same-origin-proxy)).
+  page (refer to [Same-origin proxy](#same-origin-proxy));
+- never put the value of `X-Proxy-Authorization` in a response, for
+  example in an error body;
+- refuse loopback, private, link-local and other internal addresses.
+  Apply this check to the destination and to each redirect hop, that is,
+  to each connection that the proxy opens. Do the check after DNS
+  resolution, and connect to the address that it checked (no DNS
+  rebinding between the check and the connection);
+- never send a `Host`, `Content-Length`, `Transfer-Encoding` or
+  `Connection` header, or another hop-by-hop or forbidden request header,
+  from the `headers` field. The client sends the guest headers without
+  changes. Set `Host` from the URL that the proxy checked. Set
+  `Content-Length` or `Transfer-Encoding` from the body that the proxy
+  sends;
+- allow only `http` and `https` destinations and redirect hops, and
+  refuse all other schemes.
 
 A proxy SHOULD:
 
+- use `https`. Over `http`, the token and the requests are not
+  encrypted;
 - **enforce its own host allow/deny policy**, on the destination and on
   each redirect hop, also when the client has a policy. The client policy
   in `FetchCapability` checks only the first URL. It does not check
@@ -187,12 +212,6 @@ A proxy SHOULD:
   host that is not allowed. Also, the proxy can parse the URL differently
   from the browser, and a client can have an incorrect configuration or a
   replacement;
-- refuse loopback, private, link-local and other internal addresses after
-  DNS resolution, and connect to the address that it checked (no DNS
-  rebinding between the check and the connection);
-- allow only `http` and `https` destinations;
-- remove hop-by-hop headers from the request that it sends and the
-  response that it returns;
 - set a limit on the response size and the request duration;
 - return the same error body for all types of refused destination, so that
   a guest cannot find which check failed.

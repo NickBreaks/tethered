@@ -111,7 +111,6 @@ describe('JsRunner on a real Worker', () => {
   it.each([
     ["throw new Error('out of memory')"],
     ["throw { name: 'InternalError', message: 'out of memory' }"],
-    ['function f() { f() } f()'],
   ])('%s fails once, with no retry and no worker replacement', async (code) => {
     const starts: string[] = [];
     const recycles: string[] = [];
@@ -124,6 +123,61 @@ describe('JsRunner on a real Worker', () => {
     expect(result.timedOut).toBe(false);
     expect(starts).toEqual(['g']);
     expect(recycles).toEqual([]);
+  }, 20_000);
+
+  it('function f() { f() } f() fails once, with no retry, and the broken worker is replaced', async () => {
+    // The stack overflow makes the engine fail to free the runtime.
+    const starts: string[] = [];
+    const recycles: string[] = [];
+    runner.onRun((info) => {
+      if (info) starts.push(info.tag);
+    });
+    runner.onRecycle((reason) => recycles.push(reason));
+    const result = await runner.execute('function f() { f() } f()', { tag: 'g' });
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(starts).toEqual(['g']);
+    expect(recycles).toEqual(['broken']);
+
+    const next = await runner.execute('console.log("next"); echo(41) + 1');
+    expect(next.success).toBe(true);
+    expect(next.output.map((e) => e.content)).toEqual(['[hang, echo enabled]', 'next', '42']);
+  }, 20_000);
+
+  it('a stack overflow that the engine catches is a guest error, and the worker stays', async () => {
+    // Each frame has many locals, so the engine stack limit occurs before
+    // the stack of the browser overflows. The guest can catch the error.
+    const locals = Array.from({ length: 2000 }, (_, i) => `a${i} = ${i}`).join(', ');
+    const recycles: string[] = [];
+    runner.onRecycle((reason) => recycles.push(reason));
+    const result = await runner.execute(
+      `function f() { let ${locals}; f() } try { f() } catch (e) { String(e) }`,
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.at(-1)?.content).toBe('InternalError: stack overflow');
+    expect(recycles).toEqual([]);
+  }, 20_000);
+
+  it('a parse of deeply nested source fails once, and the broken worker is replaced', async () => {
+    // The parser of the engine uses much of the stack of the browser for
+    // each level. The stack of the browser overflows first, and the engine
+    // cannot free the runtime.
+    const recycles: string[] = [];
+    runner.onRecycle((reason) => recycles.push(reason));
+    const result = await runner.execute("eval('['.repeat(1e5))");
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(recycles).toEqual(['broken']);
+
+    const next = await runner.execute('console.log("next"); echo(41) + 1');
+    expect(next.success).toBe(true);
+    expect(next.output.map((e) => e.content)).toEqual(['[hang, echo enabled]', 'next', '42']);
+  }, 20_000);
+
+  it('a final value with a toJSON that never ends times out', async () => {
+    const result = await runner.execute('({ toJSON() { for (;;) {} } })', { timeoutMs: 500 });
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(true);
   }, 20_000);
 
   it('a thrown fake interrupt is an ordinary error, not a timeout', async () => {
@@ -221,4 +275,61 @@ describe('host calls in promise jobs and timers on a real Worker', () => {
     expect(result.success).toBe(false);
     expect(result.timedOut).toBe(true);
   }, 20_000);
+});
+
+describe('a failed free of the engine runtime on a real Worker', () => {
+  // The dump of a deep array overflows the stack of the engine. After that,
+  // the engine cannot free the runtime, and the WASM module is broken.
+  const DEEP_LOG = 'let a = []; for (let i = 0; i < 10000; i++) a = [a]; console.log(a)';
+  const DEEP_RESULT = 'let a = []; for (let i = 0; i < 10000; i++) a = [a]; a';
+
+  let runner: JsRunner;
+  let probeCalls: number;
+  let recycles: string[];
+
+  beforeEach(async () => {
+    probeCalls = 0;
+    recycles = [];
+    const registry = new CapabilityStore();
+    registry.register({
+      name: 'probe',
+      description: 'host call that counts its calls',
+      stubInfo: { name: 'probe', type: 'function' },
+      invokeHost: async () => ++probeCalls,
+    });
+    registry.register({
+      name: 'off',
+      description: 'disabled capability',
+      stubInfo: { name: 'off', type: 'function' },
+      invokeHost: async () => 'not expected',
+    });
+    registry.setEnabled('probe', true);
+    runner = new JsRunner(registry, { workerFactory: defaultJsWorkerFactory, timeoutMs: 10_000 });
+    runner.onRecycle((reason) => recycles.push(reason));
+    await runner.initialize();
+  });
+
+  afterEach(() => {
+    runner.dispose();
+  });
+
+  it('after a deep array dump, the next run logs, calls the host and throws from a stub', async () => {
+    const broken = await runner.execute(DEEP_LOG);
+    expect(broken.success).toBe(false);
+
+    const result = await runner.execute('console.log("probe-log"); probe(); off()');
+    expect(result.output.map((e) => e.content)).toContain('probe-log');
+    expect(probeCalls).toBe(1);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("the 'off' capability is not enabled");
+    expect(recycles).toHaveLength(1);
+  }, 60_000);
+
+  it('20 runs that give a deep array as the result do not make the next normal run fail', async () => {
+    for (let i = 0; i < 20; i++) await runner.execute(DEEP_RESULT);
+    const result = await runner.execute('console.log("ok"); probe() + 1');
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(result.output.map((e) => e.content)).toEqual(['[probe enabled]', 'ok', '2']);
+  }, 120_000);
 });

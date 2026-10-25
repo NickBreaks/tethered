@@ -5,6 +5,16 @@ export interface CapabilityStubInfo {
   readonly globals?: readonly string[];
 }
 
+/** The context of one host call. */
+export interface HostCallContext {
+  /**
+   * Aborts when the run that made the call ends. This includes a run that
+   * is aborted, times out or is superseded. Use it to stop the work of
+   * this run only, for example requests in flight.
+   */
+  readonly signal: AbortSignal;
+}
+
 /**
  * A sandbox capability. Guest code runs in a web worker and never sees
  * the capability object. The capability only describes its guest API
@@ -29,7 +39,7 @@ export interface SandboxCapability {
   readonly name: string;
   readonly description: string;
   readonly stubInfo: CapabilityStubInfo;
-  invokeHost?(method: string, args: unknown[]): Promise<unknown>;
+  invokeHost?(method: string, args: unknown[], context?: HostCallContext): Promise<unknown>;
   readonly setupScript?: string;
   cleanup?(): void | Promise<void>;
 }

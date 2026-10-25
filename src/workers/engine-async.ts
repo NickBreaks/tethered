@@ -24,15 +24,16 @@ import type {
  * The two functions below mirror `QuickJSRuntime.executePendingJobs` and
  * `QuickJSContext.callFunction` of quickjs-emscripten-core 0.32. They use
  * protected members of the engine classes (`module`, `ffi`, `rt`, `ctx`,
- * `contextMap`). This module is the only place that reads them. The
- * package.json pins both quickjs packages to the exact version for this
- * reason. When you change the version, compare these functions with the
- * new engine source.
+ * `contextMap`, `memory`). Of the async engine calls, this module is the
+ * only place that reads them. The package.json pins both quickjs packages
+ * to the exact version for this reason. When you change the version,
+ * compare these functions with the new engine source.
  */
 
 /** The pointer types of the engine. In the wasm memory, they are numbers. */
 type RuntimePointer = Parameters<QuickJSAsyncContext['getMemory']>[0];
 type ValuePointer = Parameters<ReturnType<QuickJSAsyncContext['getMemory']>['heapValueHandle']>[0];
+type CharPointer = Parameters<ReturnType<QuickJSAsyncContext['getMemory']>['consumeJSCharPointer']>[0];
 
 /** The part of the Emscripten module that this module uses. */
 interface EngineModule {
@@ -63,7 +64,9 @@ interface ContextInternals {
   ffi: {
     QTS_ResolveException(ctx: number, value: ValuePointer): ValuePointer;
     QTS_FreeValuePointer(ctx: number, value: ValuePointer): void;
+    QTS_Dump(ctx: number, value: QuickJSHandle['value']): CharPointer;
   };
+  memory: { consumeJSCharPointer(ptr: CharPointer): string };
 }
 
 interface AsyncExports {
@@ -112,7 +115,7 @@ function runtimeInternals(runtime: QuickJSAsyncRuntime): RuntimeInternals {
 
 function contextInternals(vm: QuickJSAsyncContext): ContextInternals {
   const c = vm as unknown as ContextInternals;
-  if (!c.module || typeof c.ctx?.value !== 'number' || !c.rt || !c.ffi) {
+  if (!c.module || typeof c.ctx?.value !== 'number' || !c.rt || !c.ffi || !c.memory) {
     throw new Error('engine-async: the engine context does not have the expected shape');
   }
   return c;
@@ -197,6 +200,20 @@ export async function callFunctionAsync(
     return { error: memory.heapValueHandle(errorPtr) };
   }
   return { value: memory.heapValueHandle(resultPtr) };
+}
+
+/**
+ * Returns the text that `vm.dump()` parses for an object: JSON from the
+ * engine, or a plain string when the engine cannot make JSON. The engine
+ * makes this string in its own heap, thus the memory limit applies to it.
+ * The caller can examine its length before `JSON.parse()` makes objects
+ * in the worker. The engine can call guest code (`toJSON`). Mirrors the
+ * object branch of `QuickJSContext.dump` of quickjs-emscripten-core 0.32.
+ */
+export function dumpJson(vm: QuickJSAsyncContext, handle: QuickJSHandle): string {
+  vm.runtime.assertOwned(handle);
+  const c = contextInternals(vm);
+  return c.memory.consumeJSCharPointer(c.ffi.QTS_Dump(c.ctx.value, handle.value));
 }
 
 /**

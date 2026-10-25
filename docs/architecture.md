@@ -20,6 +20,7 @@ src/
     capability-bridge.ts      installs the guest functions for each capability
     guest-timers.ts           setTimeout & co. on virtual time, inside the worker
     engine-async.ts           async engine calls for promise jobs and timer callbacks
+    runtime-free-order.ts     workaround: free a runtime before its callbacks are deleted
   js-worker.ts                the worker script, bundled into dist/js-worker.js
 ```
 

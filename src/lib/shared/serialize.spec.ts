@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { serialize } from './serialize.js';
+import { MAX_PRETTY_DEPTH, serialize } from './serialize.js';
+
+function nested(depth: number): unknown {
+  let v: unknown = 1;
+  for (let i = 0; i < depth; i++) v = [v];
+  return v;
+}
 
 describe('serialize', () => {
   it.each([
@@ -23,5 +29,26 @@ describe('serialize', () => {
 
   it('should return "[Object]" for objects that JSON.stringify cannot convert', () => {
     expect(serialize({ n: 1n })).toBe('[Object]');
+  });
+
+  it('should pretty-print a value at the maximum depth', () => {
+    const value = nested(MAX_PRETTY_DEPTH);
+    expect(serialize(value)).toBe(JSON.stringify(value, null, 2));
+  });
+
+  it('should write compact JSON for a value deeper than the maximum depth', () => {
+    const value = nested(MAX_PRETTY_DEPTH + 1);
+    expect(serialize(value)).toBe(JSON.stringify(value));
+  });
+
+  it('should keep the text of a deep value linear in its depth', () => {
+    // Indented JSON for this value has approximately 2 * 5000^2 characters.
+    const out = serialize(nested(5000));
+    expect(out).toHaveLength(2 * 5000 + 1);
+  });
+
+  it('should not count brackets inside strings as depth', () => {
+    const value = { s: '['.repeat(100) + '{'.repeat(100), q: 'a\\"[[[' };
+    expect(serialize(value)).toBe(JSON.stringify(value, null, 2));
   });
 });

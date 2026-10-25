@@ -15,7 +15,11 @@ export type { JsRunnerOptions, RunInfo } from './lib/js/js-runner.js';
 
 export { CapabilityStore } from './lib/capabilities/capability-store.js';
 export type { CapabilityInfo } from './lib/capabilities/capability-store.js';
-export type { SandboxCapability, CapabilityStubInfo } from './lib/capabilities/capability.js';
+export type {
+  SandboxCapability,
+  CapabilityStubInfo,
+  HostCallContext,
+} from './lib/capabilities/capability.js';
 export {
   StorageCapability,
   LocalStorageBackend,

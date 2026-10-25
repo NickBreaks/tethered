@@ -20,9 +20,21 @@ import {
 import { injectCapabilityBridge } from './capability-bridge.js';
 import { GuestTimers } from './guest-timers.js';
 import { SuspendGate } from './engine-async.js';
+import { fixRuntimeFreeOrder } from './runtime-free-order.js';
 
 /** The memory limit of the engine runtime of each run. */
 const MEMORY_LIMIT = 256 * 1024 * 1024;
+
+/**
+ * The stack limit of the engine runtime of each run, in bytes of the
+ * engine stack. This is the engine default, set explicitly. Most deep
+ * recursions overflow the stack of the browser before they reach this
+ * limit. The browser error then stops the engine in a state that it
+ * cannot free, and the worker must be replaced. Frames with many local
+ * variables reach this limit first. Then the engine throws an
+ * InternalError that the guest can catch.
+ */
+const MAX_STACK_SIZE = 1024 * 1024;
 
 /**
  * Error text that can come from a spent heap. The guest can write the
@@ -31,12 +43,17 @@ const MEMORY_LIMIT = 256 * 1024 * 1024;
  */
 const OUT_OF_MEMORY = /out of memory/i;
 
+/** The error of a run on an engine that failed to free a runtime. */
+const BROKEN_MSG = 'The engine failed to free its runtime. The worker cannot run code again.';
+
 /** How a run ended. The worker posts it as the `done` message. */
 interface RunOutcome {
   success: boolean;
   timedOut: boolean;
   error?: string;
   exhausted?: boolean;
+  /** The engine failed to free a context or a runtime. */
+  broken?: boolean;
   /** The run failed before the guest code started. */
   failedBeforeGuest?: boolean;
 }
@@ -63,6 +80,13 @@ type SettledValue =
 export class JsWorkerHost {
   #module: QuickJSAsyncWASMModule | null = null;
   #nextCallId = 1;
+  /**
+   * Set when the engine throws while it frees a context or a runtime. For
+   * example, a stack overflow in a dump can cause this. After that, the
+   * state of the WASM module is not known. Its runs can lose output, host
+   * calls and stubs. Thus the worker refuses all later runs.
+   */
+  #broken = false;
   readonly #pendingCalls = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (err: Error) => void }
@@ -72,7 +96,11 @@ export class JsWorkerHost {
 
   async init(): Promise<void> {
     try {
-      this.#module = await newQuickJSAsyncWASMModuleFromVariant(variant);
+      const module = await newQuickJSAsyncWASMModuleFromVariant(variant);
+      // Without this fix, each run leaks its runtime. If the fix cannot be
+      // applied, the worker reports an init error and does not run code.
+      fixRuntimeFreeOrder(module);
+      this.#module = module;
       this.post({ type: 'ready' });
     } catch (e) {
       this.post({
@@ -119,6 +147,18 @@ export class JsWorkerHost {
       }
       this.post({ type: 'output', runId, entry });
     };
+    if (this.#broken) {
+      // Do not use the broken module again. The runner replaces the worker.
+      this.post({
+        type: 'done',
+        runId,
+        success: false,
+        timedOut: false,
+        error: BROKEN_MSG,
+        broken: true,
+      });
+      return;
+    }
     const outcome = await this.#execute(msg, emit);
     // The text of the error can come from the guest. Thus it only selects
     // the runs to examine. A failure before the guest code starts, for
@@ -126,12 +166,21 @@ export class JsWorkerHost {
     // reports a spent heap only when it cannot start a fresh engine. The
     // engine of the run is gone now.
     if (
+      !this.#broken &&
       !outcome.success &&
       !outcome.timedOut &&
       (outcome.failedBeforeGuest || OUT_OF_MEMORY.test(outcome.error ?? '')) &&
       !this.#engineCanStart()
     ) {
       outcome.exhausted = true;
+    }
+    if (this.#broken) {
+      // The engine failed to free a runtime of this run. Thus the run is
+      // not a success, also when the guest code did not fail.
+      emit({ type: 'system', content: BROKEN_MSG, timestamp: Date.now() });
+      outcome.success = false;
+      outcome.error ??= BROKEN_MSG;
+      outcome.broken = true;
     }
     this.post({
       type: 'done',
@@ -144,6 +193,7 @@ export class JsWorkerHost {
         ? { error: outcome.error.slice(0, MAX_ERROR_CHARS) }
         : {}),
       ...(outcome.exhausted ? { exhausted: true } : {}),
+      ...(outcome.broken ? { broken: true } : {}),
     });
   }
 
@@ -178,6 +228,7 @@ export class JsWorkerHost {
     try {
       runtime = this.#module.newRuntime();
       runtime.setMemoryLimit(MEMORY_LIMIT);
+      runtime.setMaxStackSize(MAX_STACK_SIZE);
       runtime.setInterruptHandler(() => {
         if (Date.now() <= deadline) return false;
         interrupted = true;
@@ -215,6 +266,9 @@ export class JsWorkerHost {
         }
         const errorObj = vm.dump(result.error);
         result.error.dispose();
+        // The dump can call guest code (toJSON) that runs until the
+        // interrupt handler stops it.
+        if (interrupted) return this.#timedOut(emit);
         return { success: false, timedOut: false, error: this.#reportError(errorObj, emit) };
       }
 
@@ -233,7 +287,10 @@ export class JsWorkerHost {
         );
         if (drained.timedOut || interrupted) return this.#timedOut(emit);
 
-        const settled = this.#settle(vm, valueHandle);
+        // The dumps below can call guest code (toJSON). Only the interrupt
+        // handler stops that code, thus examine `interrupted` after them.
+        const settled = gate.hostOnly(() => this.#settle(evalVm, valueHandle));
+        if (interrupted) return this.#timedOut(emit);
         if (settled.kind === 'rejected') {
           return {
             success: false,
@@ -259,16 +316,18 @@ export class JsWorkerHost {
       } catch {
         // Best effort. Timer handles can already be gone.
       }
+      // The engine can fail to free the context or the runtime, for
+      // example after a stack overflow. Then the module is broken.
       try {
         vm?.dispose();
       } catch {
-        // The async variant can throw during context cleanup
+        this.#broken = true;
       }
       try {
         runtime?.removeInterruptHandler();
         runtime?.dispose();
       } catch {
-        // The async variant can throw during runtime cleanup
+        this.#broken = true;
       }
     }
   }
@@ -324,7 +383,7 @@ export class JsWorkerHost {
         vm?.dispose();
         runtime?.dispose();
       } catch {
-        // Best effort.
+        this.#broken = true;
       }
     }
   }
@@ -347,11 +406,15 @@ export class JsWorkerHost {
     injectCapabilityBridge(
       vm,
       { name: snap.name, stub: snap.stub, setupScript: snap.setupScript },
+      // The bridge examines the time before it reads the arguments. This
+      // second check is after the read, because the read can call guest
+      // code (toJSON).
       (method, args) =>
         inTime()
           ? this.#rpc(runId, snap.name, method, args)
           : Promise.reject(new Error(TIMEOUT_MSG)),
       gate,
+      inTime,
     );
   }
 

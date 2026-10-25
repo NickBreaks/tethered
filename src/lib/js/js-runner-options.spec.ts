@@ -4,6 +4,7 @@ import { CapabilityStore } from '../capabilities/capability-store.js';
 import type { SandboxCapability } from '../capabilities/capability.js';
 import type { ExecutionResult, OutputEntry } from '../shared/sandbox-types.js';
 import {
+  MAX_ERROR_CHARS,
   OUTPUT_ENTRY_COST,
   type JsMainToWorkerMsg,
   type JsWorkerToMainMsg,
@@ -65,7 +66,13 @@ class FakeJsWorker {
   /** Ends run `runId` the way the worker does. */
   done(
     runId: number,
-    extra: { success?: boolean; error?: string; timedOut?: boolean; exhausted?: boolean } = {},
+    extra: {
+      success?: boolean;
+      error?: string;
+      timedOut?: boolean;
+      exhausted?: boolean;
+      broken?: boolean;
+    } = {},
   ): void {
     this.simulate({
       type: 'done',
@@ -74,6 +81,7 @@ class FakeJsWorker {
       timedOut: extra.timedOut ?? false,
       ...(extra.error !== undefined ? { error: extra.error } : {}),
       ...(extra.exhausted !== undefined ? { exhausted: extra.exhausted } : {}),
+      ...(extra.broken !== undefined ? { broken: extra.broken } : {}),
     });
   }
 }
@@ -1075,6 +1083,124 @@ describe('JsRunner run lifecycle', () => {
       expect(workers).toHaveLength(1);
     });
   });
+
+  describe('broken engine recovery', () => {
+    it.each<[string, NonNullable<Parameters<FakeJsWorker['done']>[1]>]>([
+      [
+        'a failed run',
+        { success: false, error: 'RangeError: Maximum call stack size exceeded', broken: true },
+      ],
+      ['a run that reports success', { success: true, broken: true }],
+      [
+        'a timed-out run',
+        {
+          success: false,
+          timedOut: true,
+          error: 'Execution timed out: script exceeded the time limit.',
+          broken: true,
+        },
+      ],
+    ])('replaces the worker after %s, reports "broken" and does not retry', async (_, extra) => {
+      await build();
+      const reasons: string[] = [];
+      runner.onRecycle((r) => reasons.push(r));
+      const p = runner.execute('deep()');
+      await settle();
+      workers[0].done(workers[0].runs[0].runId, extra);
+      const result = await p;
+      expect(result.success).toBe(false);
+      expect(result.timedOut).toBe(extra.timedOut ?? false);
+      expect(result.error).toBe(extra.error);
+      expect(reasons).toEqual(['broken']);
+      expect(workers[0].terminate).toHaveBeenCalled();
+      await settle();
+      expect(workers).toHaveLength(2);
+      expect(workers[1].runs).toEqual([]);
+
+      const next = runner.execute('1');
+      await settle();
+      expect(workers[1].runs).toHaveLength(1);
+      workers[1].done(workers[1].runs[0].runId);
+      expect((await next).success).toBe(true);
+    });
+
+    it('replaces the worker also with recoverExhaustion: false', async () => {
+      await build({ recoverExhaustion: false });
+      const reasons: string[] = [];
+      runner.onRecycle((r) => reasons.push(r));
+      const p = runner.execute('deep()');
+      await settle();
+      current().done(current().runs[0].runId, { success: false, error: 'E', broken: true });
+      await p;
+      expect(reasons).toEqual(['broken']);
+      await settle();
+      expect(workers).toHaveLength(2);
+    });
+
+    it('does not retry a broken run that also reports a spent heap', async () => {
+      await build();
+      const reasons: string[] = [];
+      runner.onRecycle((r) => reasons.push(r));
+      const p = runner.execute('big()');
+      await settle();
+      workers[0].done(workers[0].runs[0].runId, {
+        success: false,
+        error: OOM,
+        exhausted: true,
+        broken: true,
+      });
+      const result = await p;
+      expect(result.error).toBe(OOM);
+      expect(reasons).toEqual(['broken']);
+      await settle();
+      expect(workers).toHaveLength(2);
+      expect(workers[1].runs).toEqual([]);
+    });
+  });
+
+  describe('host call signal', () => {
+    it.each([
+      ['the worker reports done', (_r: JsRunner, w: FakeJsWorker, runId: number) => w.done(runId)],
+      ['abort()', (r: JsRunner) => r.abort()],
+    ])('aborts the signal of each host call of a run when %s, and not before', async (_name, end) => {
+      const signals: AbortSignal[] = [];
+      registry.register({
+        name: 'res',
+        description: 'records the signal',
+        stubInfo: { name: 'res', type: 'function' },
+        invokeHost: (_method, _args, context) => {
+          signals.push(context!.signal);
+          return new Promise(() => {});
+        },
+      });
+      registry.setEnabled('res', true);
+      await build();
+      const p = runner.execute('res()');
+      await settle();
+      const worker = workers[0];
+      const runId = worker.runs[0].runId;
+      worker.simulate({ type: 'cap-call', callId: 1, runId, capability: 'res', method: 'res', args: [] });
+      await settle();
+      expect(signals).toHaveLength(1);
+      expect(signals[0].aborted).toBe(false);
+      end(runner, worker, runId);
+      await p;
+      expect(signals[0].aborted).toBe(true);
+
+      // The next run gets a new signal that is not aborted.
+      const p2 = runner.execute('res()');
+      await settle();
+      const next = current();
+      const runId2 = next.runs[next.runs.length - 1].runId;
+      next.simulate({ type: 'cap-call', callId: 2, runId: runId2, capability: 'res', method: 'res', args: [] });
+      await settle();
+      expect(signals).toHaveLength(2);
+      expect(signals[1].aborted).toBe(false);
+      next.done(runId2);
+      await p2;
+      expect(signals[1].aborted).toBe(true);
+    });
+  });
 });
 
 // The worker is untrusted: every worker→host message is shape-checked on
@@ -1329,7 +1455,7 @@ describe('JsRunner worker message validation', () => {
       const { p, runId } = await start();
       call(runId, { callId: 31, method: 'get', args: [1, 'a'] });
       await settle();
-      expect(invokeHost).toHaveBeenCalledWith('get', [1, 'a']);
+      expect(invokeHost).toHaveBeenCalledWith('get', [1, 'a'], { signal: expect.any(AbortSignal) });
       expect(capResults()).toEqual([
         { type: 'cap-result', callId: 31, ok: true, value: 'host value' },
       ]);
@@ -1434,6 +1560,21 @@ describe('JsRunner worker message validation', () => {
     });
 
     it.each([
+      ['a capability name', 'x'.repeat(MAX_ERROR_CHARS * 2), 'm'],
+      ['a method name', 'store', 'x'.repeat(MAX_ERROR_CHARS * 2)],
+    ])('a refusal that repeats a long %s is cut to MAX_ERROR_CHARS', async (_, cap, method) => {
+      await build();
+      const { p, runId } = await start();
+      current().simulate(capCall(runId, 9, cap, method));
+      await settle();
+      const [reply] = capResults();
+      expect(reply).toMatchObject({ type: 'cap-result', callId: 9, ok: false });
+      expect((reply as { error: string }).error).toHaveLength(MAX_ERROR_CHARS);
+      current().done(runId);
+      await p;
+    });
+
+    it.each([
       ['a declared object method', 'store', 'setItem'],
       ['the function capability name', 'echo', 'echo'],
       ['a declared global', 'clock', 'sleep'],
@@ -1442,7 +1583,9 @@ describe('JsRunner worker message validation', () => {
       const { p, runId } = await start();
       current().simulate(capCall(runId, 6, cap, method));
       await settle();
-      expect(invokeHost).toHaveBeenCalledExactlyOnceWith(method, []);
+      expect(invokeHost).toHaveBeenCalledExactlyOnceWith(method, [], {
+        signal: expect.any(AbortSignal),
+      });
       expect(capResults()).toEqual([
         { type: 'cap-result', callId: 6, ok: true, value: `host ${method}` },
       ]);

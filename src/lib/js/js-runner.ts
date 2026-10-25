@@ -16,8 +16,28 @@ import {
 import { checkWorkerMessage } from './check-worker-message.js';
 
 const ABORT_MSG = 'Execution aborted.';
+const HOST_CALL_FAILED_MSG = 'host call failed';
+
+/**
+ * Returns the message of an error from a host call, as a string of
+ * `MAX_ERROR_CHARS` or fewer. The capability can throw any value. Its
+ * `message` can be a getter that throws, and `String()` can throw. This
+ * function never throws. When it cannot get a string, it returns a fixed
+ * message. Thus the runner always has a reply for the guest.
+ */
+function hostErrorMessage(e: unknown): string {
+  try {
+    const text = e instanceof Error ? (e.message as unknown) : String(e);
+    if (typeof text !== 'string') return HOST_CALL_FAILED_MSG;
+    return copyPrefix(text, MAX_ERROR_CHARS);
+  } catch {
+    return HOST_CALL_FAILED_MSG;
+  }
+}
 const SUPERSEDED_MSG = 'Execution superseded by a newer run.';
 const NOT_READY_MSG = 'The JS worker is not ready.';
+/** The `onRecycle` reason when the engine of the worker failed to free a runtime. */
+const BROKEN_REASON = 'broken';
 const outputLimitMsg = (max: number): string =>
   `Output limit reached (${max} characters). The runner dropped the remaining output.`;
 
@@ -107,8 +127,9 @@ export interface JsRunnerOptions {
   concurrency?: 'supersede' | 'queue';
   /**
    * Replace the worker between runs after it completes this number of
-   * runs. This gives protection against slow leaks in the WASM heap. Off
-   * by default.
+   * runs. The worker frees the engine runtime of each run. Thus this
+   * option is only a guard against slow leaks, for example from the
+   * fragmentation of the WASM heap. Off by default.
    */
   recycleAfterRuns?: number;
   /**
@@ -150,12 +171,14 @@ export interface RunInfo {
 }
 
 /**
- * A settled run, whether the worker reported that its heap is spent, and
- * whether the run called `invokeHost()` of a capability.
+ * A settled run, whether the worker reported that its heap is spent or its
+ * engine is broken, and whether the run called `invokeHost()` of a
+ * capability.
  */
 interface RunOutcome {
   result: ExecutionResult;
   exhausted: boolean;
+  broken: boolean;
   calledHost: boolean;
 }
 
@@ -170,6 +193,8 @@ interface ActiveJsRun {
   enabledCaps: SandboxCapability[];
   /** Set when a guest call of this run reached `invokeHost()`. */
   calledHost: boolean;
+  /** Aborts when the run ends. Each `invokeHost()` of the run gets its signal. */
+  hostCalls: AbortController;
   /** The cost of the worker output that the runner kept for this run, in characters. */
   outputChars: number;
   /** Set when the run reached its output limit. Then the runner drops all output from the worker. */
@@ -182,7 +207,8 @@ interface ActiveJsRun {
  * can always stop a run, hot synchronous loops included. They terminate
  * the worker and respawn it.
  * A supersede replaces the worker the same way. The worker is also
- * replaced between runs on heap exhaustion (with one retry). As an
+ * replaced between runs on heap exhaustion (with one retry) and when its
+ * engine fails to free a runtime (with no retry). As an
  * opt-in, it is also replaced every `recycleAfterRuns` runs.
  */
 export class JsRunner implements CodeRunner {
@@ -286,8 +312,9 @@ export class JsRunner implements CodeRunner {
 
   /**
    * Called when the worker is replaced outside abort/timeout: with
-   * `'periodic'` for `recycleAfterRuns`, or with the run's error message
-   * after the worker reported a spent heap.
+   * `'periodic'` for `recycleAfterRuns`, with `'broken'` after the engine
+   * failed to free a runtime, or with the run's error message after the
+   * worker reported a spent heap.
    */
   onRecycle(fn: (reason: string) => void): () => void {
     return this.#recycle.subscribe(fn);
@@ -450,7 +477,7 @@ export class JsRunner implements CodeRunner {
     const worker = this.#worker;
     this.#runsSinceSpawn++;
 
-    const { result, exhausted, calledHost } = await new Promise<RunOutcome>((resolve) => {
+    const { result, exhausted, broken, calledHost } = await new Promise<RunOutcome>((resolve) => {
       const backstopHandle = setTimeout(
         () => this.#kill(runId, 'timeout'),
         timeoutMs + BACKSTOP_GRACE_MS,
@@ -464,6 +491,7 @@ export class JsRunner implements CodeRunner {
         backstopHandle,
         enabledCaps: enabled,
         calledHost: false,
+        hostCalls: new AbortController(),
         outputChars: 0,
         outputFull: false,
       };
@@ -480,6 +508,14 @@ export class JsRunner implements CodeRunner {
       this.#run.emit({ tag, startTime, timeoutMs });
       this.#output.emit(sysEntry);
     });
+
+    // The engine of the worker failed to free a runtime. Its later runs can
+    // lose output, host calls and stubs, thus always replace it. Do not
+    // retry the run: its guest code already ran.
+    if (broken && this.#worker === worker && !this.#disposed) {
+      this.#replaceWorker(BROKEN_REASON);
+      return result;
+    }
 
     // Recover only when the worker of this run reported a spent heap.
     // Otherwise, a kill already replaced the worker and reported its own
@@ -660,7 +696,10 @@ export class JsRunner implements CodeRunner {
         type: 'cap-result',
         callId: msg.callId,
         ok: false,
-        error: `capability '${msg.capability}' is not enabled or has no host implementation`,
+        error: copyPrefix(
+          `capability '${msg.capability}' is not enabled or has no host implementation`,
+          MAX_ERROR_CHARS,
+        ),
       };
     } else if (!declaredMethods(cap.stubInfo).includes(msg.method)) {
       // Only the guest functions the host declared may be called, so a
@@ -669,19 +708,24 @@ export class JsRunner implements CodeRunner {
         type: 'cap-result',
         callId: msg.callId,
         ok: false,
-        error: `capability '${msg.capability}' has no method '${msg.method}'`,
+        error: copyPrefix(
+          `capability '${msg.capability}' has no method '${msg.method}'`,
+          MAX_ERROR_CHARS,
+        ),
       };
     } else {
       this.#activeRun.calledHost = true;
       try {
-        const value = await cap.invokeHost(msg.method, msg.args);
+        const value = await cap.invokeHost(msg.method, msg.args, {
+          signal: this.#activeRun.hostCalls.signal,
+        });
         reply = { type: 'cap-result', callId: msg.callId, ok: true, value };
       } catch (e) {
         reply = {
           type: 'cap-result',
           callId: msg.callId,
           ok: false,
-          error: e instanceof Error ? e.message : String(e),
+          error: hostErrorMessage(e),
         };
       }
     }
@@ -694,7 +738,7 @@ export class JsRunner implements CodeRunner {
       } catch (e) {
         // An un-cloneable result (DataCloneError): answer with an error so
         // the guest's await does not hang until the timeout.
-        this.#replyCapError(worker, msg, e instanceof Error ? e.message : String(e));
+        this.#replyCapError(worker, msg, hostErrorMessage(e));
       }
     }
   }
@@ -715,7 +759,7 @@ export class JsRunner implements CodeRunner {
 
   #completeRun(msg: Extract<JsWorkerToMainMsg, { type: 'done' }>): void {
     if (!this.#activeRun || this.#activeRun.runId !== msg.runId) return;
-    const { output, startTime, resolve, backstopHandle, enabledCaps, calledHost } =
+    const { output, startTime, resolve, backstopHandle, enabledCaps, calledHost, hostCalls } =
       this.#activeRun;
     clearTimeout(backstopHandle);
     this.#activeRun = null;
@@ -723,11 +767,12 @@ export class JsRunner implements CodeRunner {
     this.#activeTag.set(null);
     this.#run.emit(null);
 
-    this.#cleanupCaps(enabledCaps);
+    this.#cleanupCaps(enabledCaps, hostCalls);
 
     resolve({
       result: {
-        success: msg.success,
+        // A run on a broken engine is never a success.
+        success: msg.success && msg.broken !== true,
         output,
         // A copy, not a slice. A slice can keep the full string alive.
         ...(msg.error !== undefined ? { error: copyPrefix(msg.error, MAX_ERROR_CHARS) } : {}),
@@ -735,13 +780,14 @@ export class JsRunner implements CodeRunner {
         durationMs: Date.now() - startTime,
       },
       exhausted: msg.exhausted === true,
+      broken: msg.broken === true,
       calledHost,
     });
   }
 
   #kill(runId: number, reason: 'abort' | 'timeout'): void {
     if (!this.#activeRun || this.#activeRun.runId !== runId) return;
-    const { output, startTime, resolve, backstopHandle, enabledCaps } = this.#activeRun;
+    const { output, startTime, resolve, backstopHandle, enabledCaps, hostCalls } = this.#activeRun;
     clearTimeout(backstopHandle);
     this.#activeRun = null;
     this.#isRunning.set(false);
@@ -758,7 +804,7 @@ export class JsRunner implements CodeRunner {
     this.#ready.set(false);
     if (!this.#disposed) this.#respawn();
 
-    this.#cleanupCaps(enabledCaps);
+    this.#cleanupCaps(enabledCaps, hostCalls);
 
     resolve({
       result: {
@@ -769,6 +815,7 @@ export class JsRunner implements CodeRunner {
         durationMs: Date.now() - startTime,
       },
       exhausted: false,
+      broken: false,
       calledHost: false,
     });
   }
@@ -782,7 +829,7 @@ export class JsRunner implements CodeRunner {
    */
   #supersede(): void {
     if (!this.#activeRun) return;
-    const { output, startTime, resolve, backstopHandle, enabledCaps } = this.#activeRun;
+    const { output, startTime, resolve, backstopHandle, enabledCaps, hostCalls } = this.#activeRun;
     clearTimeout(backstopHandle);
     this.#activeRun = null;
 
@@ -797,7 +844,7 @@ export class JsRunner implements CodeRunner {
     this.#ready.set(false);
     if (!this.#disposed) this.#respawn();
 
-    this.#cleanupCaps(enabledCaps);
+    this.#cleanupCaps(enabledCaps, hostCalls);
 
     resolve({
       result: {
@@ -808,6 +855,7 @@ export class JsRunner implements CodeRunner {
         durationMs: Date.now() - startTime,
       },
       exhausted: false,
+      broken: false,
       calledHost: false,
     });
   }
@@ -848,7 +896,9 @@ export class JsRunner implements CodeRunner {
     if (!this.#activeRun) this.#isRunning.set(false);
   }
 
-  #cleanupCaps(caps: { cleanup?(): void | Promise<void> }[]): void {
+  /** Aborts the host calls of the run that ends. Then calls `cleanup()` of each capability. */
+  #cleanupCaps(caps: { cleanup?(): void | Promise<void> }[], hostCalls: AbortController): void {
+    hostCalls.abort();
     for (const cap of [...caps].reverse()) {
       try {
         // A rejected cleanup must not become an unhandled rejection.

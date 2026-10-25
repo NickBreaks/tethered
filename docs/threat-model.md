@@ -29,6 +29,10 @@ engine compiled to WebAssembly, inside a dedicated web worker:
   - stubs that throw, for capabilities that are registered but disabled
     when the run starts.
 
+  An enabled capability without an `invokeHost()` installs nothing. An
+  enabled capability with the name `timer` always gets the timers of the
+  worker, not host calls (refer to the timer section).
+
   It has no DOM and no `window`. It has none of the globals of the worker
   (its `fetch`, `importScripts`, `indexedDB`, `postMessage`), and no host
   objects. Values cross the engine boundary as copies.
@@ -43,9 +47,14 @@ engine compiled to WebAssembly, inside a dedicated web worker:
   asked, for the run that asked.
 - Each run gets a fresh engine runtime and context. Thus the objects and
   globals of one run are not available to the next run. All runs on one
-  worker share the WASM heap of that worker. A run can fill or fragment
-  that heap, and then the next run can fail (refer to the memory limit
-  below).
+  worker share the WASM heap of that worker. After each run, the worker
+  frees the runtime of the run, and the engine can use that memory again.
+  A run can fragment the heap, and then the next run can fail (refer to
+  the memory limit below). The engine can fail to free the runtime of a
+  run. In practice, this occurs after an overflow of the stack of the
+  browser (refer to the stack limit below). Then the worker refuses all
+  later runs, and the runner replaces the worker. Thus a broken engine
+  does not run more guest code.
 - `abort()`, a supersede and the timeout backstop terminate the worker
   and start a fresh one. Thus guest code cannot continue after them.
   But a host call that started on the main thread can complete after the
@@ -83,8 +92,11 @@ installed as a stub that throws. An unregistered capability installs
 nothing. The built-in capabilities keep their secrets (for example, the
 proxy token) on the main thread. They never copy them into the worker or
 into an error message. The host sends the message of an error from
-`invokeHost()` to the guest without changes. Thus a custom capability
-must not put secrets in its errors.
+`invokeHost()` to the guest. It cuts the message to 10000 characters.
+When the host cannot get a string, the guest gets `host call failed`.
+Examples are a value whose `String()` throws, and an `Error` whose
+`message` is not a string. Thus a custom capability must not put secrets
+in its errors.
 
 **Limits.**
 
@@ -93,13 +105,22 @@ must not put secrets in its errors.
   itself, a backstop on the main thread terminates the worker. The
   backstop starts when the host posts the run, and it expires after
   `timeoutMs` + 2 s.
-  This is also true while the guest waits for a host call. The limit
-  also applies to promise jobs and timers after the script. Only the
+  The wait for a host call has no timer in the worker. Only the backstop
+  applies to that wait. The bridge examines the deadline before it reads
+  the arguments of a host call. The worker examines it again before it
+  sends the call to the main thread. The
+  limit also applies to promise jobs and timers after the script. It
+  also applies while the worker reads the final value or error. For
+  example, a `toJSON()` that runs until the deadline gives
+  `timedOut: true`. Only the
   interrupt handler or the deadline can mark a run as timed out. A
   thrown value cannot. The runner refuses a time limit that is not a
   finite number greater than 0, or that is larger than 2147481647 ms.
 - Memory: each run gets a fresh engine runtime with a 256 MiB memory
-  limit. This limit applies only to the heap of the engine. These limits
+  limit. The limit applies to each run, not to the worker. The worker
+  frees the runtime when the run ends. Thus a run does not keep its
+  memory for later runs. This limit applies only to the heap of the
+  engine. These limits
   apply to the memory of the run outside that heap:
   - Output: the runner keeps a maximum of `maxOutputChars` characters
     (default 1048576) of output for each run. A character is a UTF-16
@@ -113,15 +134,45 @@ must not put secrets in its errors.
     error. The runner keeps a copy of the characters, not a slice. A
     slice can keep the full string of the guest in host memory.
   - Timers: a run can have a maximum of 10000 pending timers.
+  - Host call arguments: the arguments of one host call can have a
+    maximum of `MAX_HOST_CALL_ARG_CHARS` (16777216) characters. A string
+    counts its length, a bigint its digits and a symbol its description.
+    Each other value counts the length of its JSON from the engine. The bridge measures this JSON before it parses it. A call
+    over the limit gets an error with the name `RangeError`, which the
+    guest can catch. No message goes to the main thread. The worker gets
+    one copy of a value over the limit. The memory limit of the engine
+    bounds that copy, because the value is in the heap of the engine.
   - Fetch: refer to `maxResponseBytes` in the fetch section.
 
-  Other copies, for example of the arguments of a host call, have no
-  separate limit. The time limit and the memory limit of the engine
-  bound them. The runner retries a run only when the worker reports a spent
+  Within the limit, the copies of the arguments can be larger than the
+  arguments in the heap of the engine. This applies to the copies in the
+  worker and on the main thread. Other copies have no separate limit.
+  Each of them comes from a value in the heap of the engine. Thus the
+  memory limit of the engine bounds them. The worker converts each
+  `console` argument and the result to JSON text before it applies the
+  output limit. The text has indentation only when the depth of the
+  value is 20 or less. Deeper values
+  get compact JSON. Thus the size of the text increases only linearly
+  with the depth. This text in the worker can still be larger than the
+  output limit. The runner retries a run only when the worker reports a spent
   heap from signals that the guest cannot forge. It does not retry a run
   that called `invokeHost()` of a capability. Thus a retry never does the
-  side effects of a capability two times. Refer to
-  [run lifecycle](run-lifecycle.md).
+  side effects of a capability two times. A retry gets a new time limit.
+  Thus one `execute()` can take approximately two times `timeoutMs`, plus
+  the boot of the new worker. The runner also replaces a
+  worker when the engine fails to free a runtime. It does not retry that
+  run. Refer to [run lifecycle](run-lifecycle.md).
+- Stack: each run gets an engine stack limit (`MAX_STACK_SIZE`) of
+  1 MiB. This is the engine default, set explicitly. A deep recursion
+  overflows the stack of the browser or reaches the engine limit. The
+  size of each frame decides which occurs first.
+  - The stack of the browser overflows first for most recursions, and
+    for deeply nested source in `eval()`. Then the engine cannot free
+    the runtime, and the runner replaces the worker. The run fails, and
+    the runner does not retry it.
+  - The engine limit occurs first for frames with many local variables.
+    Then the guest gets an `InternalError` that it can catch, and the
+    worker stays.
 - Boot: if a worker is not ready within `bootTimeoutMs` (default 30 s),
   the host terminates it.
 
@@ -146,19 +197,40 @@ must not put secrets in its errors.
 - **Bugs in the browser and the WebAssembly engine.** This scope does not
   include a bug in QuickJS, the WASM runtime or the browser that lets guest
   code go out of the engine. Such an escape gets access to the worker.
-  A worker from an `http(s)` or `blob:` URL has the origin of the page. It
-  has `fetch`, `indexedDB` and other worker globals:
+  A worker from an `http(s)` or `blob:` URL has the origin of the page.
+  The default worker factory starts the worker from an `http(s)` URL.
+  Such a worker has `fetch`, `indexedDB` and other worker globals:
   - Its `fetch` sends the cookies of the page to the origin of the page.
     With `credentials: 'include'`, it can send credentialed requests to
     other origins too.
-  - It can read and write all IndexedDB and CacheStorage data of the
-    origin, `__sandbox_disk__` included.
-  - It cannot read `localStorage` or `sessionStorage`, because a worker
-    does not have them. Thus it cannot read the proxy token or the data
-    of the storage capability.
+  - It can read and write all IndexedDB, CacheStorage and OPFS data of
+    the origin, `__sandbox_disk__` included.
+  - It cannot read `localStorage` or `sessionStorage` directly, because a
+    worker does not have them. But while the storage capability is
+    enabled, forged storage calls can read the same keys as the guest
+    (refer to the subsequent list).
+  - Thus it cannot read the proxy token directly. But page script can
+    read the token in `sessionStorage`. If the page runs or trusts data
+    that the escape wrote, the escape code can run as page script. For
+    example, a service worker that serves the app from CacheStorage can
+    serve the code of the escape.
+
+  Caution: do not run or trust code or data from the IndexedDB,
+  CacheStorage or OPFS of the origin. An escape can write this data, and
+  then get access to the page and the proxy token. Or, load
+  the worker from a `data:` URL. If the page has a CSP, it must allow
+  this worker URL and WebAssembly compilation (refer to the CSP text
+  below).
+
+  Caution: do not trust `BroadcastChannel` messages in the page. An
+  escape can post to each channel of the origin. Also, do not let page
+  code wait for a Web Lock of the origin without a limit. An escape can
+  hold the lock, and then the page code stops.
 
   A worker from a `data:` URL has an opaque origin. It cannot get access
-  to the cookies, IndexedDB or CacheStorage of the page.
+  to the IndexedDB or CacheStorage of the page. Its `fetch` is
+  cross-site. Thus it sends only the cookies with `SameSite=None`, and
+  only with `credentials: 'include'`.
 
   The escape also controls the messages of the worker:
   - It can post forged messages to the host. The host checks their shape,
@@ -171,30 +243,49 @@ must not put secrets in its errors.
   - It stays in the worker after the run ends. The runner uses the same
     worker for the next runs, until it replaces the worker (refer to
     [run lifecycle](run-lifecycle.md)). Thus the escape can read the code
-    of the next runs, forge their results and make host calls for them.
+    of the next runs and forge their results. It also gets the results of
+    their host calls.
+  - During each run, it can make forged host calls until the run ends.
+    It can keep a run open until the backstop, at `timeoutMs` + 2 s.
+  - It can send many host calls at the same time. The limits apply to
+    each call, but not to the number of calls in flight. Thus the memory
+    that these calls use on the main thread has no limit.
 
   To decrease the network access, serve the worker script with its own
   `Content-Security-Policy` header. For example:
   `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'none'`.
   Put the header on the URL that the worker loads from. Some bundlers
   change the name of `js-worker.js`. The worker does not load other
-  resources, so it does not need `connect-src`. This policy stops
-  requests from the worker. It does not stop access to IndexedDB,
-  CacheStorage or `postMessage`. `worker-src 'none'` stops nested
-  workers. Without it, `script-src 'self'` lets the escape start a
+  resources, so it does not need `connect-src`. This policy stops all
+  requests from the worker, except the load of same-origin scripts
+  (`import()`). It does not stop access to IndexedDB, CacheStorage,
+  OPFS, `BroadcastChannel`, Web Locks or `postMessage`. `worker-src 'none'`
+  stops nested workers. Without it, `script-src 'self'` lets the escape start a
   nested worker from a same-origin script. That worker uses the policy of
   its own response, which can have no limits.
 
   A worker that loads from an `http(s)` URL uses the policy of its own
   response. The policy of the page does not apply to it. A worker from a
-  `blob:` or `data:` URL uses the policy of the page. Cross-origin
-  isolation (COOP/COEP) does not decrease this access.
+  `blob:` or `data:` URL uses the policy of the page. If the page has a
+  policy, the policy must allow the worker URL and WebAssembly
+  compilation. For example, `worker-src data:` and
+  `script-src 'wasm-unsafe-eval'` do this. Without `worker-src`, the
+  browser uses `child-src`, then `script-src`, then `default-src`.
+  `'unsafe-eval'` also allows WebAssembly compilation. Cross-origin
+  isolation (COOP/COEP) does not decrease this access. It also gives the
+  worker `SharedArrayBuffer`, and thus a precise timer. With this timer,
+  an escape can more easily use timing attacks on other data in the same
+  process. A worker from a `data:` URL also runs in the process of the
+  page.
 - **Denial of service beyond the time and memory limits.** Within its
   limits, a guest can:
   - use all of the CPU;
   - fill its heap;
   - write output up to the output limit;
   - make many capability calls;
+  - copy a maximum of 16777216 characters of arguments to the main
+    thread in each host call, also through the storage and disk
+    capabilities;
   - fill the storage quota of the browser through the storage and disk
     capabilities.
 
@@ -215,7 +306,9 @@ must not put secrets in its errors.
 
 All four are off until the host registers and enables them. Arguments
 arrive as plain copies of values. Paths, keys and URLs go through
-`String()`. `storage.setItem` refuses a value that is not a string.
+`String()`. The one exception is `disk.listFiles()` with no argument
+(`undefined`): it lists the root. `storage.setItem` refuses a value that
+is not a string.
 `disk.writeFile` converts its content with `String()` and does not
 refuse it. The fetch `method`, `headers` and `body` do not go through
 `String()` (refer to the fetch section).
@@ -225,14 +318,20 @@ refuse it. The fetch `method`, `headers` and `body` do not go through
 The guest gets a `fetch(url, { method, headers, body })` that returns a
 response with `status`, `ok`, `statusText`, `text()` and `json()`. The
 host reads the response body on the main thread and copies it to the
-guest. The host does not start the read when `Content-Length` is larger
-than `maxResponseBytes` (default 10 MiB). It stops the read when the body
-becomes larger than that limit. The limit counts the bytes of the body.
+guest. The limit `maxResponseBytes` (default 10 MiB) applies to each
+request. The host does not start the read when `Content-Length` is
+larger than the limit. `Content-Length` gives the encoded size, for
+example after compression. The host stops the read when the decoded
+bytes of the body become larger than the limit.
 The copies of the body that the host and the worker make (a string, then
 JSON, then a message) can be many times larger. These copies are
 outside the memory limit of the guest. When a run ends, the host aborts
 all requests of the run that are in flight. This includes a run that is
-aborted, times out or is superseded.
+aborted, times out or is superseded. The abort stops the wait for the
+response. It does not cancel a request that the server already got. For
+example, a `POST` that the server got still has its effect. The requests
+of other runs continue, also when two runtimes share one
+`FetchCapability` object.
 
 The capability resolves the guest URL one time, against
 `document.baseURI` (else `location.href`). The page `fetch` uses the same
@@ -262,6 +361,13 @@ The capability selects the route in this sequence:
    one label (for example, `*.co.uk`). A refused URL fails before a
    network call occurs. There is no proxy call and the host does not read
    the token. The request goes to the URL that the check examined.
+
+   Without a host policy, the capability does not limit the scheme. A
+   `blob:` URL of the page has the origin of the page, so it goes
+   directly (step 3). Thus the guest can read a `blob:` URL of the page
+   when it knows the URL. A `data:` URL has an opaque origin. It goes
+   directly when the proxy is disabled, else to the proxy. The proxy
+   must refuse all schemes other than `http` and `https`.
 2. **Proxy disabled** (no proxy URL): the `fetch` of the page, directly.
 3. **Same-origin URL**: the `fetch` of the page, directly, also when a
    proxy is configured. The origin of the page is `location.origin`.
@@ -270,6 +376,14 @@ The capability selects the route in this sequence:
    trailing slashes from the proxy base before it adds `/proxy/fetch`.
    The proxy request does not follow redirects (`redirect: 'error'`).
    Thus the token goes only to the host of the proxy base.
+
+The direct requests and the proxy `POST` use the `fetch` of the page.
+Thus they go through the service worker of the page, if there is one.
+The service worker must send them without changes. Else the routes and
+the checks above do not apply. The service worker must not store proxy
+requests or their headers, for example in a background-sync queue in
+IndexedDB. An escape can read the storage of the origin, and thus the
+token.
 
 What the guest can do with this capability:
 
@@ -291,7 +405,8 @@ What the guest can do with this capability:
   `fetch` of the page, so the page CSP applies to them. `connect-src`
   also applies when the policy is not set.
 - **Requests through the proxy**: the proxy server sends them, from its
-  network. The proxy must refuse private and internal destinations. A
+  network. The proxy must refuse private and internal destinations, also
+  on each redirect hop. A
   same-origin proxy also gets the cookies of the page. Its response
   headers apply to the origin of the page. A proxy that copies headers
   between the client and the destination can thus give the session of
@@ -307,6 +422,12 @@ What the guest can do with this capability:
   the proxy marks the token as invalid. Thus a guest can cause the
   `tokenInvalid` signal of the host, and a token prompt if the host shows
   one.
+- Do not put credentials in `corsProxyUrl`. The `FetchCapability`
+  constructor throws a `TypeError` for a proxy URL with a user name or a
+  password. It also throws for a proxy URL that does not parse. An empty
+  base and a relative base parse. The capability examines `proxyBase()`
+  again on each proxy call. The errors that the guest gets do not show
+  the proxy URL or the token.
 - `ProxyAuth.setToken` accepts only visible ASCII characters, or an empty
   string. `authHeader()` ignores an empty token, and a token with other
   characters. Thus the token is always a valid header value, and a header
@@ -315,9 +436,14 @@ What the guest can do with this capability:
   only these three options. It ignores all other options, for example
   `credentials`, `mode` and `redirect`. The capability does not convert
   the three options to strings. In proxy mode, they go to the proxy as
-  the JSON values that the guest gave. In direct mode, the browser
-  removes forbidden browser headers. The proxy decides which headers it
-  sends to the destination.
+  the JSON values that the guest gave. The capability sends the guest
+  headers without changes, also `Host`, `Content-Length` and
+  `Transfer-Encoding`. The proxy must not send these headers to the
+  destination. In direct mode, the browser
+  removes forbidden browser headers. It converts a `body` that is not a
+  string, for example an object becomes `[object Object]`. It also adds
+  the `Origin` and `Referer` headers by its usual rules. The proxy
+  decides which headers it sends to the destination.
 
 Limits of the host policy:
 
@@ -325,7 +451,10 @@ Limits of the host policy:
   plain `http`.** The policy matches only the hostname.
   `allowHosts: ['example.com']` admits `http://example.com:8080/` and
   also `https://example.com/`. Thus, the guest can get access to all
-  services on that host.
+  services on that host. In direct mode on an `https` page, the browser
+  blocks plain `http` requests as mixed content. It does not block
+  requests to `localhost` or to a loopback address, for example
+  `http://127.0.0.1:6379/`. The browser trusts these hosts.
 - **`denyHosts` is not a security boundary.** It compares hostnames, not
   destinations. The guest can get access to the same server through an
   IP literal (`http://203.0.113.7/`), a CNAME or any other name that
@@ -339,7 +468,9 @@ Limits of the host policy:
 - **The policy does not check redirects again.** In direct mode, the
   browser follows redirects, and a proxy can also follow them. Thus, an
   open redirect on an allowed host can go to a host that is not allowed.
-  Proxies SHOULD apply their own policy to each hop.
+  Proxies SHOULD apply their own host policy to each hop. They MUST
+  refuse private addresses and schemes other than `http` and `https` on
+  each hop (refer to [proxy requirements](proxy-protocol.md#proxy-requirements)).
 - **Same-origin redirects go around the proxy.** A same-origin URL goes
   directly, also when a proxy is configured, and the browser follows its
   redirects. Thus an open redirect on the origin of the page can send a
@@ -362,12 +493,20 @@ strings.
   This includes keys from earlier runs, other guests, other tabs and
   page code on the same origin. The guest has no method that lists keys.
   Thus it gets access only to keys whose names it knows or guesses. Data
-  stays from one run to the next, and from one session to the next.
+  stays from one run to the next, and from one session to the next. This
+  is best effort. The code does not call `navigator.storage.persist()`,
+  thus the browser can remove the data.
 - The guest cannot get access to keys outside the prefix.
 - Host code that reads these keys must not trust their values.
-- Writes use the `localStorage` quota of the origin. To set the scope of
-  storage or to limit it, give a `MapStorageBackend` or your own backend
-  to `new StorageCapability(backend)`. A backend is an object with
+- With `LocalStorageBackend`, each guest write that changes the value
+  fires a `storage` event in the other documents of the origin. These
+  include other tabs and iframes in the same tab. A write of the same
+  value, and a remove of a key that does not exist, fire no event. Host
+  code that listens for these events must not trust them.
+- Writes use the `localStorage` quota of the origin. When the guest fills
+  the quota, `localStorage.setItem` calls of the host page also throw.
+  To set the scope of storage or to limit it, give a `MapStorageBackend`
+  or your own backend to `new StorageCapability(backend)`. A backend is an object with
   synchronous `getItem`, `setItem` and `removeItem`. The prefix is a
   feature of `LocalStorageBackend` only. Other backends get the key of
   the guest without changes. `MapStorageBackend` has no size limit.
@@ -385,14 +524,18 @@ are records in the `__sandbox_disk__` IndexedDB database.
   segments, and resolves `..` segments. A `..` at the root stays at the
   root (`/../x` is `/x`). Thus, `/a/../b` and `/b` are the same file. A
   relative path starts at `/`. A backslash is an ordinary character.
+- `writeFile` and `readFile` refuse a path that normalizes to the root
+  `/`, for example `''`, `.` or `/..`.
 - The guest can read, overwrite and list all files in the store. This
   includes files from earlier runs and other guests. Data stays from one
-  run to the next, and from one session to the next. The guest cannot
-  delete files.
+  run to the next, and from one session to the next. This is best
+  effort, as for storage. The guest cannot delete files.
 - The host can get access to the same files through `getBackend()`. Do
-  not trust their contents. The backend does not normalize keys. Thus a
-  key that the host writes without a leading `/` is not available to the
-  guest.
+  not trust their contents. The backend does not normalize keys. Thus
+  the guest cannot read a key that the host writes in a form that is not
+  normalized, for example `a` (no leading `/`) or `/a//b`. `listFiles`
+  can show a part of a key such as `/a//b`, but not a key without a
+  leading `/`. `listFiles` ignores keys that are not strings.
 - Writes use the storage quota of the origin. To set the scope of the
   store, give a `MapDiskBackend` or your own `DiskBackend` to
   `new DiskCapability(backend)`. `MapDiskBackend` keeps the files in the
@@ -403,15 +546,28 @@ are records in the `__sandbox_disk__` IndexedDB database.
 
 Enables `setTimeout`, `setInterval`, `clearTimeout` and `clearInterval`.
 The timers run inside the worker on virtual time. The worker drains them
-before the run settles. After a timeout, or when a promise job throws,
-the worker stops the drain and discards the remaining timers. Thus,
-timers cannot fire after the run ends. The
+before the run settles. After a timeout, or after an error from the job
+queue itself, the worker stops the drain and discards the remaining
+timers. Thus, timers cannot fire after the run ends. Only an engine
+error that the guest cannot catch comes from the job queue. The worker
+drops an unhandled promise rejection, for example an exception in a
+`.then()` handler or in an `async` function. It does not stop the drain
+and does not fail the run. A rejected top-level result fails the run.
+The drain does not run when the top-level code throws. Then no timer
+fires. A timer callback that throws
+does not stop the drain. The worker reports the error, the other timers
+fire, and the run fails.
+
+A delay that is not a finite number greater than 0 becomes 0, for
+example `NaN`, `-1` or a string. Time is virtual, so a timer never waits
+in real time. Thus timers cannot slow the host calls of a run. The
 timer functions make no host calls. A timer callback is guest code, so it
 can call the enabled capabilities, as all guest code can. The timers add
 two risks:
 
 - CPU time, for example an interval with a delay of 0. The time limit of
-  the run limits it.
+  the run limits it. An interval that the guest does not clear fires
+  until the time limit. Thus the run ends as a timeout.
 - Memory of the worker. Each pending timer has an entry in the worker,
   outside the heap of the engine. A run can have a maximum of 10000
   pending timers. A timer is pending until it fires or the guest clears
@@ -421,14 +577,17 @@ two risks:
 ## Reporting a vulnerability
 
 Report security issues privately. Do not report them in a public issue.
-Use the private vulnerability reports of the repository ("Report a
-vulnerability" in the Security tab). Include:
+The repository is not public yet. When it is public, use its private
+vulnerability reports ("Report a vulnerability" in the Security tab).
+Include:
 
 - the package version and browser;
 - a minimal guest script and host setup that show the issue;
 - what the guest got: host state that it read or changed, a side effect
   without a capability, the token, or a limit that it went around.
 
-The maintainer will reply to the report, and will agree the fix and its
-disclosure with you. For issues in "Out of scope" above, open a usual bug
+Also use the private report for an escape from the engine, the WASM
+runtime or the browser, and tell the upstream project. The maintainer
+will reply to the report, and will agree the fix and its disclosure with
+you. For the other issues in "Out of scope" above, open a usual bug
 report. [SECURITY.md](../SECURITY.md) lists the supported versions.

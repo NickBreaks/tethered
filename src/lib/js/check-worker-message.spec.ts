@@ -170,5 +170,20 @@ describe('checkWorkerMessage', () => {
         reason: 'malformed done',
       });
     });
+
+    it.each([true, false])('accepts done with broken: %s and keeps it', (broken) => {
+      const failed = { ...base, success: false, error: 'E' };
+      expect(checkWorkerMessage({ ...failed, broken, extra: 1 })).toStrictEqual({
+        ok: true,
+        msg: { ...failed, broken },
+      });
+    });
+
+    it.each(['true', 1, null, {}])('rejects done with the non-boolean broken flag %j', (broken) => {
+      expect(checkWorkerMessage({ ...base, broken })).toStrictEqual({
+        ok: false,
+        reason: 'malformed done',
+      });
+    });
   });
 });

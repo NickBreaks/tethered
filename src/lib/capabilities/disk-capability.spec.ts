@@ -109,6 +109,31 @@ describe('DiskCapability', () => {
     expect([...val].sort()).toEqual(['a.txt', 'dir/']);
   });
 
+  it.each([[''], ['.'], ['/'], ['/..'], ['a/..'], ['//./']])(
+    'writeFile and readFile refuse the path %j, which normalizes to the root',
+    async (path) => {
+      const cap = new DiskCapability(backend);
+      const msg = "EINVAL: invalid path: a file path must not be the root '/'";
+      await expect(cap.invokeHost('writeFile', [path, 'hidden'])).rejects.toThrow(new Error(msg));
+      await expect(cap.invokeHost('readFile', [path])).rejects.toThrow(new Error(msg));
+      expect(await backend.list()).toEqual([]);
+    },
+  );
+
+  it('the guest gets the root path error from writeFile', async () => {
+    const cap = new DiskCapability(backend);
+    injectCap(vm, cap);
+    const val = await evalAndDump(`
+      try {
+        disk.writeFile('/..', 'hidden');
+        'no error';
+      } catch (e) {
+        e.message;
+      }
+    `);
+    expect(val).toBe("EINVAL: invalid path: a file path must not be the root '/'");
+  });
+
   it('should list direct children of subdirectory', async () => {
     const cap = new DiskCapability(backend);
     injectCap(vm, cap);
@@ -226,6 +251,18 @@ describe('DiskCapability', () => {
     `);
     expect(val).toEqual(['one', 'two']);
     expect((await backend.list()).sort()).toEqual(['/b.txt', '/c.txt']);
+  });
+
+  it('listFiles skips backend keys that are not strings', async () => {
+    // An IndexedDB store can hold number, date or array keys that the host wrote.
+    const keys: unknown[] = [1, new Date(0), ['/a'], '/file.txt', '/dir/x.txt'];
+    const cap = new DiskCapability({
+      read: async () => undefined,
+      write: async () => {},
+      list: async () => keys as string[],
+    });
+    const listed = (await cap.invokeHost('listFiles', ['/'])) as string[];
+    expect([...listed].sort()).toEqual(['dir/', 'file.txt']);
   });
 
   it('listFiles resolves . and .. in the directory path', async () => {

@@ -139,7 +139,9 @@ Your own capability implements `SandboxCapability`:
 - a `name`;
 - a `description`;
 - a `stubInfo` that describes the guest functions to install;
-- `invokeHost(method, args)` on the main thread.
+- `invokeHost(method, args, context)` on the main thread. The signal
+  `context.signal` aborts when the run of the call ends. Use it to stop
+  the work of that run.
 
 The guest chooses the `args` values. Validate them. The guest can do all
 that `invokeHost` allows.
