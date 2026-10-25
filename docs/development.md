@@ -56,9 +56,25 @@ have these headers, it must add a service-worker shim.
 
 ## Releasing
 
+The release workflow (`.github/workflows/release.yml`) publishes to npm
+only when you push a tag `vX.Y.Z` or `vX.Y.Z-pre`. A push to a branch
+never publishes. A pre-release goes to the `next` dist-tag. npm adds
+provenance to each version.
+
 1. Update `CHANGELOG.md` and the `version` in `package.json`.
-2. Commit the changes.
-3. Tag the commit `vX.Y.Z` and push the tag.
-4. The release workflow (`.github/workflows/release.yml`) builds, tests
-   and publishes to npm with provenance. The workflow must have an
-   `NPM_TOKEN` repository secret.
+2. Commit the changes and push them to `main`.
+3. Make sure that CI passes on that commit.
+4. Tag the commit `vX.Y.Z` and push the tag.
+
+The workflow stops if the tag is not the `version` in `package.json`, or
+if the tagged commit is not on `main`. It runs all checks before it
+publishes.
+
+### One-time setup
+
+1. On npmjs.com, make a granular access token with read and write access
+   to packages. Let it skip 2FA, because CI cannot enter a code.
+2. In the GitHub repository, add the `npm` environment (Settings >
+   Environments). Optionally, add yourself as a required reviewer.
+3. Add the token to that environment as the `NPM_TOKEN` secret.
+4. Add a tag ruleset for `v*` so that only you can push release tags.

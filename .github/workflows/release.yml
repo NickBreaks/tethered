@@ -1,9 +1,13 @@
 name: Release
 
+# Publishes to npm only when a release tag (vX.Y.Z or vX.Y.Z-pre) is
+# pushed. A push to a branch never publishes. The npm token is the
+# NPM_TOKEN secret of the `npm` environment.
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: read
@@ -13,11 +17,14 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
+    environment: npm
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
       - name: Check the tag matches package.json
@@ -27,13 +34,26 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match package.json $version" >&2
             exit 1
           fi
+      - name: Check the tagged commit is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME is not on main" >&2
+            exit 1
+          fi
       - run: npm ci
       - run: npm run build
       - run: npm run lint
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
       - run: npx playwright install --with-deps chromium-headless-shell
       - run: npm run test:integration
-      - run: npm publish --provenance --access public
+      # A pre-release version goes to the `next` dist-tag, not `latest`.
+      - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) npm publish --provenance --access public --tag next ;;
+            *) npm publish --provenance --access public ;;
+          esac
