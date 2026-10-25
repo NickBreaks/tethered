@@ -81,11 +81,17 @@ stages the version.
 
 1. Turn on 2FA for your npm account. Approval of a staged version must
    have 2FA.
-2. On npmjs.com, make a granular access token with read and write access
-   to all packages. Do not let it skip 2FA. Staging does not need 2FA,
-   thus a stolen token cannot make a version public. After the first
-   release, make a new token that has access only to `tethered`.
+2. Make sure that the `tethered` package is on npm. npm cannot stage the
+   first version of a package, and you cannot add a trusted publisher to
+   a package that is not on npm. If it is not on npm, publish a
+   placeholder version (for example `0.0.0-stage`) from your computer.
 3. In the GitHub repository, add the `npm` environment (Settings >
    Environments). Optionally, add yourself as a required reviewer.
-4. Add the token to that environment as the `NPM_TOKEN` secret.
-5. Add a tag ruleset for `v*` so that only you can push release tags.
+4. On npmjs.com, open the settings of `tethered` and add a trusted
+   publisher for GitHub Actions: user `NickBreaks`, repository
+   `tethered`, workflow `release.yml`, environment `npm`. Allow only
+   `npm stage publish`. The workflow must stage a version in the 2 days
+   after you add the trusted publisher, or the trusted publisher expires.
+5. After the first staged release, set Publishing access to "Require
+   two-factor authentication and disallow tokens".
+6. Add a tag ruleset for `v*` so that only you can push release tags.

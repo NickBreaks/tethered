@@ -2,8 +2,8 @@ name: Release
 
 # Stages a release on npm only when a release tag (vX.Y.Z or vX.Y.Z-pre)
 # is pushed. A push to a branch never stages. A staged version is not
-# public until a maintainer approves it with 2FA. The npm token is the
-# NPM_TOKEN secret of the `npm` environment.
+# public until a maintainer approves it with 2FA. npm trusted publishing
+# gives the job a short-lived OIDC token. The job has no npm token.
 on:
   push:
     tags:
@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
+  id-token: write # npm trusted publishing and provenance
 
 jobs:
   publish:
@@ -53,10 +53,8 @@ jobs:
       - run: npm install -g npm@latest
       # A pre-release version goes to the `next` dist-tag, not `latest`.
       - name: Stage
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           case "$GITHUB_REF_NAME" in
-            *-*) npm stage publish --provenance --access public --tag next ;;
-            *) npm stage publish --provenance --access public ;;
+            *-*) npm stage publish --access public --tag next ;;
+            *) npm stage publish --access public ;;
           esac
