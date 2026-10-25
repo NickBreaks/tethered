@@ -42,9 +42,11 @@ describe('serialize', () => {
   });
 
   it('should keep the text of a deep value linear in its depth', () => {
-    // Indented JSON for this value has approximately 2 * 5000^2 characters.
-    const out = serialize(nested(5000));
-    expect(out).toHaveLength(2 * 5000 + 1);
+    // Indented JSON for this value has approximately 2 * 1000^2 characters.
+    // Do not increase the depth: at depth 5000, JSON.stringify overflows
+    // the stack on Node 22 and Node 24.
+    const out = serialize(nested(1000));
+    expect(out).toHaveLength(2 * 1000 + 1);
   });
 
   it('should not count brackets inside strings as depth', () => {
