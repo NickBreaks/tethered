@@ -130,7 +130,9 @@ rt.registry.setEnabled('fetch', true);
 - **timer**: guest timers run on virtual time inside the worker. The
   clock starts at 0 for each run, and moves forward to the next due
   timer. No real time passes. The worker drains the timers before the
-  run settles.
+  run settles. A run can have a maximum of 10000 pending timers. Then
+  `setTimeout` and `setInterval` throw a `RangeError`. A timer is
+  pending until it fires or the guest clears it.
 
 Your own capability implements `SandboxCapability`:
 

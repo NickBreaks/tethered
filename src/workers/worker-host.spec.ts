@@ -1,9 +1,11 @@
 import { vi } from 'vitest';
 import { QuickJSAsyncContext, QuickJSAsyncWASMModule } from 'quickjs-emscripten-core';
 import { JsWorkerHost } from './worker-host.js';
-import type {
-  JsCapabilitySnapshot,
-  JsWorkerToMainMsg,
+import {
+  MAX_ERROR_CHARS,
+  OUTPUT_ENTRY_COST,
+  type JsCapabilitySnapshot,
+  type JsWorkerToMainMsg,
 } from '../lib/js/worker-protocol.js';
 import type { OutputEntry } from '../lib/shared/sandbox-types.js';
 
@@ -42,7 +44,11 @@ describe('JsWorkerHost', () => {
 
   async function run(
     code: string,
-    options: { timeoutMs?: number; capabilities?: JsCapabilitySnapshot[] } = {},
+    options: {
+      timeoutMs?: number;
+      maxOutputChars?: number;
+      capabilities?: JsCapabilitySnapshot[];
+    } = {},
   ): Promise<RunReport> {
     const runId = ++runSeq;
     const output: OutputEntry[] = [];
@@ -53,6 +59,7 @@ describe('JsWorkerHost', () => {
       runId,
       code,
       timeoutMs: options.timeoutMs ?? 2000,
+      maxOutputChars: options.maxOutputChars ?? 1_048_576,
       capabilities: options.capabilities ?? [],
     });
     return { done: await done, output };
@@ -186,5 +193,81 @@ describe('JsWorkerHost', () => {
       expect(done.timedOut).toBe(true);
       expect(Date.now() - t0).toBeLessThan(3000);
     }, 10_000);
+  });
+
+  describe('output limit', () => {
+    // Each entry costs its characters plus OUTPUT_ENTRY_COST.
+    const C = OUTPUT_ENTRY_COST;
+
+    it('posts the entries in the limit, then the next entry cut to one character over it', async () => {
+      const { done, output } = await run(
+        "console.log('12345'); console.warn('abcdefghij'); console.log('more'); 'result'",
+        { maxOutputChars: 10 + 2 * C },
+      );
+      expect(done).toEqual({ type: 'done', runId: expect.any(Number), success: true, timedOut: false });
+      expect(output.map((e) => [e.type, e.content])).toEqual([
+        ['log', '12345'],
+        ['warn', 'abcdef'],
+      ]);
+    }, 10_000);
+
+    it('posts an entry that fills the limit exactly', async () => {
+      const { output } = await run("console.log('12345'); '12345'", {
+        maxOutputChars: 10 + 2 * C,
+      });
+      expect(output.map((e) => [e.type, e.content])).toEqual([
+        ['log', '12345'],
+        ['result', '12345'],
+      ]);
+    }, 10_000);
+
+    it('stops the posts of a loop that logs large strings, and still posts done', async () => {
+      const { done, output } = await run(
+        "for (let i = 0; i < 1000; i++) console.log('x'.repeat(10000))",
+        { maxOutputChars: 50_000 + 6 * C },
+      );
+      expect(done.success).toBe(true);
+      expect(output).toHaveLength(6);
+      expect(output.reduce((n, e) => n + e.content.length, 0)).toBe(50_001);
+    }, 10_000);
+
+    it('counts system and error entries of the worker', async () => {
+      const { done, output } = await run("console.log('123456789'); throw new Error('boom')", {
+        maxOutputChars: 10 + 2 * C,
+      });
+      expect(done.success).toBe(false);
+      expect(done.error).toMatch(/^Error: boom/);
+      expect(output.map((e) => [e.type, e.content])).toEqual([
+        ['log', '123456789'],
+        ['error', 'Er'],
+      ]);
+      const timedOut = await run("console.log('123456789'); while (true) {}", {
+        maxOutputChars: 10 + 2 * C,
+        timeoutMs: 100,
+      });
+      expect(timedOut.done.timedOut).toBe(true);
+      expect(timedOut.output.map((e) => [e.type, e.content])).toEqual([
+        ['log', '123456789'],
+        ['system', 'Ex'],
+      ]);
+    }, 10_000);
+
+    it('charges the fixed cost for empty entries, and posts the entry over the limit empty', async () => {
+      const { done, output } = await run('for (let i = 0; i < 1000; i++) console.log()', {
+        maxOutputChars: 10 * C,
+      });
+      expect(done.success).toBe(true);
+      expect(output).toHaveLength(11);
+      expect(output.every((e) => e.type === 'log' && e.content === '')).toBe(true);
+    }, 10_000);
+  });
+
+  describe('error limit', () => {
+    it('posts an error of at most MAX_ERROR_CHARS characters', async () => {
+      const { done } = await run("throw new Error('x'.repeat(1e7))", { timeoutMs: 10_000 });
+      expect(done.success).toBe(false);
+      expect(done.error).toMatch(/^Error: x/);
+      expect(done.error!.length).toBeLessThanOrEqual(MAX_ERROR_CHARS);
+    }, 30_000);
   });
 });

@@ -3,7 +3,11 @@ import { JsRunner, type JsRunnerOptions, type RunInfo } from './js-runner.js';
 import { CapabilityStore } from '../capabilities/capability-store.js';
 import type { SandboxCapability } from '../capabilities/capability.js';
 import type { ExecutionResult, OutputEntry } from '../shared/sandbox-types.js';
-import type { JsMainToWorkerMsg, JsWorkerToMainMsg } from './worker-protocol.js';
+import {
+  OUTPUT_ENTRY_COST,
+  type JsMainToWorkerMsg,
+  type JsWorkerToMainMsg,
+} from './worker-protocol.js';
 
 // Run-lifecycle features (per-run options, activeTag, streaming,
 // queueing, recycling, exhaustion recovery), driven through a scripted
@@ -1000,6 +1004,64 @@ describe('JsRunner run lifecycle', () => {
       expect(workers[0].runs).toHaveLength(1);
     });
 
+    it('does not retry a run that called invokeHost, but still replaces the worker', async () => {
+      const invokeHost = vi.fn(async () => 'ok');
+      registry.register({
+        name: 'disk',
+        description: 'side effects',
+        stubInfo: { name: 'disk', type: 'object', methods: ['writeFile'] },
+        invokeHost,
+      });
+      registry.setEnabled('disk', true);
+      await build();
+      const reasons: string[] = [];
+      runner.onRecycle((r) => reasons.push(r));
+      const p = runner.execute('disk.writeFile("/a", "x"); big()');
+      await settle();
+      const runId = workers[0].runs[0].runId;
+      workers[0].simulate({
+        type: 'cap-call',
+        callId: 1,
+        runId,
+        capability: 'disk',
+        method: 'writeFile',
+        args: ['/a', 'x'],
+      });
+      await settle();
+      expect(invokeHost).toHaveBeenCalledTimes(1);
+      workers[0].done(runId, { success: false, error: OOM, exhausted: true });
+      const result = await p;
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe(OOM);
+      expect(reasons).toEqual([OOM]);
+      await settle();
+      expect(workers).toHaveLength(2);
+      expect(workers[1].runs).toEqual([]);
+      expect(invokeHost).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries a run whose host calls were all refused before invokeHost', async () => {
+      await build();
+      const p = runner.execute('nope(); big()');
+      await settle();
+      const runId = workers[0].runs[0].runId;
+      workers[0].simulate({
+        type: 'cap-call',
+        callId: 1,
+        runId,
+        capability: 'nope',
+        method: 'nope',
+        args: [],
+      });
+      await settle();
+      workers[0].done(runId, { success: false, error: OOM, exhausted: true });
+      await settle();
+      expect(workers[1].runs).toHaveLength(1);
+      workers[1].done(workers[1].runs[0].runId);
+      expect((await p).success).toBe(true);
+    });
+
     it('can be disabled with recoverExhaustion: false', async () => {
       await build({ recoverExhaustion: false });
       const reasons: string[] = [];
@@ -1431,6 +1493,79 @@ describe('JsRunner worker message validation', () => {
     });
   });
 
+  describe('cap-call uses the capabilities of the run start', () => {
+    const capCall = (runId: number, callId: number) => ({
+      type: 'cap-call' as const,
+      callId,
+      runId,
+      capability: 'echo',
+      method: 'echo',
+      args: [],
+    });
+
+    const echo = (invokeHost: () => Promise<unknown>) => ({
+      name: 'echo',
+      description: 'function capability',
+      stubInfo: { name: 'echo', type: 'function' as const },
+      invokeHost,
+    });
+
+    const capResults = () => current().posts.filter((m) => m.type === 'cap-result');
+
+    it('a capability that the host enables during the run does not reach invokeHost', async () => {
+      const invokeHost = vi.fn(async () => 'late');
+      registry.register(echo(invokeHost));
+      await build();
+      const { p, runId } = await start();
+      registry.setEnabled('echo', true);
+      current().simulate(capCall(runId, 1));
+      await settle();
+      expect(invokeHost).not.toHaveBeenCalled();
+      expect(capResults()).toEqual([
+        { type: 'cap-result', callId: 1, ok: false, error: expect.stringContaining('echo') },
+      ]);
+      current().done(runId);
+      await p;
+    });
+
+    it('a capability that the host replaces during the run reaches neither object', async () => {
+      const oldHost = vi.fn(async () => 'old');
+      const newHost = vi.fn(async () => 'new');
+      registry.register(echo(oldHost));
+      registry.setEnabled('echo', true);
+      await build();
+      const { p, runId } = await start();
+      registry.register(echo(newHost));
+      registry.setEnabled('echo', true);
+      current().simulate(capCall(runId, 2));
+      await settle();
+      expect(oldHost).not.toHaveBeenCalled();
+      expect(newHost).not.toHaveBeenCalled();
+      expect(capResults()).toEqual([
+        { type: 'cap-result', callId: 2, ok: false, error: expect.stringContaining('echo') },
+      ]);
+      current().done(runId);
+      await p;
+
+      // The next run uses the new object.
+      const next = await start();
+      current().simulate(capCall(next.runId, 3));
+      await settle();
+      expect(newHost).toHaveBeenCalledOnce();
+      current().done(next.runId);
+      await next.p;
+    });
+  });
+
+  describe('error length', () => {
+    it('keeps a maximum of 10000 characters of the error of a run', async () => {
+      await build();
+      const { p, runId } = await start();
+      current().done(runId, { success: false, error: 'x'.repeat(100_000) });
+      expect((await p).error).toBe('x'.repeat(10_000));
+    });
+  });
+
   describe('done for the wrong run or with a bad shape', () => {
     it.each([
       ['non-boolean success', (runId: number) => ({ runId, success: 'yes', timedOut: false })],
@@ -1459,6 +1594,138 @@ describe('JsRunner worker message validation', () => {
       const result = await p;
       expect(result.success).toBe(false);
       expect(result.error).toBe('Error: real');
+    });
+  });
+
+  describe('output limit', () => {
+    const LIMIT_TEXT = (n: number) =>
+      `Output limit reached (${n} characters). The runner dropped the remaining output.`;
+    // Each entry costs its characters plus OUTPUT_ENTRY_COST.
+    const C = OUTPUT_ENTRY_COST;
+
+    function build(maxOutputChars?: number): void {
+      runner = new JsRunner(registry, {
+        workerFactory: () => {
+          const w = new FakeJsWorker();
+          workers.push(w);
+          return w as unknown as Worker;
+        },
+        ...(maxOutputChars !== undefined ? { maxOutputChars } : {}),
+      });
+    }
+
+    function log(runId: number, content: string, type: OutputEntry['type'] = 'log'): void {
+      current().simulate({ type: 'output', runId, entry: { type, content, timestamp: 1 } });
+    }
+
+    it.each([0, -1, 1.5, NaN, Infinity, 2 ** 53, '5' as unknown as number])(
+      'the constructor rejects maxOutputChars %s',
+      (maxOutputChars) => {
+        const factory = () => new FakeJsWorker() as unknown as Worker;
+        expect(() => new JsRunner(registry, { workerFactory: factory, maxOutputChars })).toThrow(
+          new RangeError(
+            `maxOutputChars must be a safe integer greater than 0 (got ${String(maxOutputChars)}).`,
+          ),
+        );
+      },
+    );
+
+    it('sends the limit in the run message: 1048576 by default', async () => {
+      build();
+      await runner.initialize();
+      const { p, runId } = await start();
+      expect(current().runs[0].maxOutputChars).toBe(1_048_576);
+      current().done(runId);
+      await p;
+      runner.dispose();
+      build(Number.MAX_SAFE_INTEGER);
+      await runner.initialize();
+      void runner.execute('y');
+      await settle();
+      expect(current().runs[0].maxOutputChars).toBe(Number.MAX_SAFE_INTEGER);
+    });
+
+    it('drops the entry that goes over the limit and all later output, with one system entry', async () => {
+      build(10 + 2 * C);
+      await runner.initialize();
+      const streamed: OutputEntry[] = [];
+      runner.onOutput((e) => streamed.push(e));
+      const { p, runId } = await start();
+      log(runId, 'abcde');
+      log(runId, 'fghij', 'warn');
+      // The total is 10 now. Each later entry goes over the limit.
+      log(runId, 'k');
+      log(runId, '', 'error');
+      log(runId, 'x'.repeat(1_000_000));
+      log(runId, 'Execution timed out', 'system');
+      log(runId, '42', 'result');
+      expect(await state(p)).toBe('pending');
+      current().done(runId);
+      const result = await p;
+      expect(result.success).toBe(true);
+      expect(result.output.map((e) => [e.type, e.content])).toEqual([
+        ['system', '[no capabilities enabled]'],
+        ['log', 'abcde'],
+        ['warn', 'fghij'],
+        ['system', LIMIT_TEXT(10 + 2 * C)],
+      ]);
+      expect(streamed).toEqual(result.output);
+    });
+
+    it('drops a first entry that is larger than the limit', async () => {
+      build(3);
+      await runner.initialize();
+      const { p, runId } = await start();
+      log(runId, 'abcd');
+      log(runId, 'a');
+      current().done(runId, { success: false, error: 'Error: boom' });
+      const result = await p;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Error: boom');
+      expect(result.output.map((e) => e.content)).toEqual([
+        '[no capabilities enabled]',
+        LIMIT_TEXT(3),
+      ]);
+    });
+
+    it('does not count the system entries of the runner, and gives each run a new count', async () => {
+      build(5 + C);
+      await runner.initialize();
+      // The `[… enabled]` entry costs more than 5 + C characters.
+      const first = await start();
+      log(first.runId, '12345');
+      void runner.abort();
+      const aborted = await first.p;
+      expect(aborted.output.map((e) => e.content)).toEqual([
+        '[no capabilities enabled]',
+        '12345',
+        'Execution aborted.',
+      ]);
+      await settle();
+      const second = await start();
+      log(second.runId, '12345');
+      current().done(second.runId);
+      expect((await second.p).output.map((e) => e.content)).toEqual([
+        '[no capabilities enabled]',
+        '12345',
+      ]);
+    });
+
+    it('charges the fixed cost for each empty entry from the worker', async () => {
+      build();
+      await runner.initialize();
+      const streamed: OutputEntry[] = [];
+      runner.onOutput((e) => streamed.push(e));
+      const { p, runId } = await start();
+      for (let i = 0; i < 100_000; i++) log(runId, '');
+      current().done(runId);
+      const result = await p;
+      const logs = result.output.filter((e) => e.type === 'log');
+      expect(logs).toHaveLength(Math.floor(1_048_576 / C));
+      expect(result.output.at(-1)).toEqual(
+        expect.objectContaining({ type: 'system', content: LIMIT_TEXT(1_048_576) }),
+      );
+      expect(streamed).toEqual(result.output);
     });
   });
 });

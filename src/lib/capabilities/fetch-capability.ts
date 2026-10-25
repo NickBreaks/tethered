@@ -39,6 +39,14 @@ export interface FetchCapabilityOptions {
 /** The default of {@link FetchCapabilityOptions.maxResponseBytes}: 10 MiB. */
 const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
+/**
+ * The response header with which the proxy marks its own token failure.
+ * A destination can also answer 401, and the proxy gives that status to
+ * the client. Thus the status alone does not identify a token failure.
+ */
+const PROXY_ERROR_HEADER = 'X-Proxy-Error';
+const PROXY_ERROR_UNAUTHORIZED = 'unauthorized';
+
 /** A normalized host list: exact hostnames plus `*.` wildcard suffixes. */
 interface HostList {
   readonly exact: ReadonlySet<string>;
@@ -66,8 +74,12 @@ interface HostList {
  *      URL/method/headers/body in the JSON body. If the token is missing,
  *      the capability invalidates the token and throws an error. The
  *      host app can show a token prompt when the token is invalid.
- *   4. A 401 response from the proxy invalidates the token and throws
- *      a "CORS proxy rejected the token" error.
+ *   4. A 401 response with `X-Proxy-Error: unauthorized` invalidates the
+ *      token and throws a "CORS proxy rejected the token" error. A 401
+ *      without this header comes from the destination. The guest gets it
+ *      as a response, and the token stays.
+ *   5. The proxy POST does not follow redirects. A redirect could send
+ *      the `X-Proxy-Authorization` header to a different host.
  *
  * Host policy: with `allowHosts`, `denyHosts` or both, the capability
  * checks the resolved URL BEFORE the routing above. Thus a refused URL
@@ -324,6 +336,9 @@ export class FetchCapability implements SandboxCapability {
     const proxyResponse = await globalThis.fetch(proxyUrl, {
       signal,
       method: 'POST',
+      // The browser keeps custom headers on a redirect, also to a different
+      // origin. Thus a redirect fails the request and the token stays here.
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
         'X-Proxy-Authorization': authHeader,
@@ -336,7 +351,10 @@ export class FetchCapability implements SandboxCapability {
       }),
     });
 
-    if (proxyResponse.status === 401) {
+    if (
+      proxyResponse.status === 401 &&
+      proxyResponse.headers.get(PROXY_ERROR_HEADER) === PROXY_ERROR_UNAUTHORIZED
+    ) {
       this.proxyAuth.invalidate();
       throw new Error('CORS proxy rejected the token. Re-enter a valid token.');
     }

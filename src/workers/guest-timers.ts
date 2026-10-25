@@ -19,6 +19,14 @@ interface DrainResult {
  */
 const JOB_BATCH = 1000;
 
+/**
+ * The maximum number of pending timers of one run. A timer is pending from
+ * its `setTimeout` / `setInterval` call until it fires (one-shot) or the
+ * guest clears it. The timer entries are host memory of the worker, outside
+ * the memory limit of the engine. Thus this limit keeps them small.
+ */
+const MAX_PENDING_TIMERS = 10_000;
+
 interface TimerEntry {
   id: number;
   callback: QuickJSHandle;
@@ -47,16 +55,23 @@ export class GuestTimers {
   private timers = new Map<number, TimerEntry>();
   private nextId = 1;
   private virtualNow = 0;
+  /**
+   * The timer whose callback runs now, else null. A clear does not dispose
+   * the callback handle of this timer, because the engine uses it. The
+   * drain loop disposes it after the callback.
+   */
+  private running: TimerEntry | null = null;
 
   install(vm: QuickJSAsyncContext): void {
     // Reset state on every install
     this.timers.clear();
     this.nextId = 1;
     this.virtualNow = 0;
+    this.running = null;
 
-    const makeTypeError = (msg: string): QuickJSHandle => {
+    const makeError = (name: 'TypeError' | 'RangeError', msg: string): QuickJSHandle => {
       const evalResult = vm.evalCode(
-        `(msg => new TypeError(msg))(${JSON.stringify(msg)})`,
+        `(msg => new ${name}(msg))(${JSON.stringify(msg)})`,
       );
       if (evalResult.error) {
         // This is not expected. Fall back to a generic error
@@ -75,7 +90,15 @@ export class GuestTimers {
         (cbHandle?: QuickJSHandle, delayHandle?: QuickJSHandle) => {
           if (!cbHandle || vm.typeof(cbHandle) !== 'function') {
             return {
-              error: makeTypeError(`${fnName}: callback must be a function`),
+              error: makeError('TypeError', `${fnName}: callback must be a function`),
+            };
+          }
+          if (this.timers.size >= MAX_PENDING_TIMERS) {
+            return {
+              error: makeError(
+                'RangeError',
+                `${fnName}: too many pending timers (the limit is ${MAX_PENDING_TIMERS})`,
+              ),
             };
           }
           let delay = 0;
@@ -108,7 +131,12 @@ export class GuestTimers {
         const id = vm.getNumber(idHandle);
         const entry = this.timers.get(id);
         if (entry) {
+          // Remove the entry now, so that a loop of set and clear calls
+          // cannot fill the map. The callback of the running timer stays
+          // alive until the drain loop disposes it.
           entry.cleared = true;
+          this.timers.delete(id);
+          if (entry !== this.running && entry.callback.alive) entry.callback.dispose();
         }
         return { value: vm.undefined };
       });
@@ -213,7 +241,7 @@ export class GuestTimers {
       // 3. Collect due timers
       const due: TimerEntry[] = [];
       for (const e of this.timers.values()) {
-        if (!e.cleared && e.dueTime <= this.virtualNow) {
+        if (e.dueTime <= this.virtualNow) {
           due.push(e);
         }
       }
@@ -221,10 +249,9 @@ export class GuestTimers {
 
       // 4. If no timers are due, advance the virtual clock or exit
       if (due.length === 0) {
-        // Find the next due time among the entries that are not cleared
+        // Find the next due time. A clear removes its entry from the map.
         let next: number | null = null;
         for (const e of this.timers.values()) {
-          if (e.cleared) continue;
           if (next === null || e.dueTime < next) next = e.dueTime;
         }
         if (next === null) {
@@ -238,12 +265,30 @@ export class GuestTimers {
       // 5. Fire due callbacks. Each callback is a macrotask. Thus the loop
       // runs the promise jobs of a callback before the next callback.
       for (const entry of due) {
-        // Check cleared again, because a previous callback can cancel it
+        // A previous callback can clear this timer. The clear removed the
+        // entry and disposed its callback handle.
         if (entry.cleared) continue;
 
-        const callResult = await gate.suspendable(() =>
-          callFunctionAsync(vm, entry.callback, vm.undefined),
-        );
+        // A one-shot timer is not pending when it fires. Remove it before
+        // the callback, so that it does not count against the limit.
+        if (entry.interval === null) this.timers.delete(entry.id);
+
+        this.running = entry;
+        let callResult;
+        try {
+          callResult = await gate.suspendable(() =>
+            callFunctionAsync(vm, entry.callback, vm.undefined),
+          );
+        } finally {
+          this.running = null;
+          if (entry.interval === null || entry.cleared) {
+            // A one-shot timer, or an interval that the callback cleared
+            if (entry.callback.alive) entry.callback.dispose();
+          } else {
+            // Interval: reschedule
+            entry.dueTime += entry.interval;
+          }
+        }
         const callErr = callResult.error;
         if (callErr) {
           if (outOfTime()) {
@@ -255,15 +300,6 @@ export class GuestTimers {
           hadError = true;
         } else {
           if (callResult.value.alive) callResult.value.dispose();
-        }
-
-        if (entry.interval === null) {
-          // One-shot: dispose handle, remove from registry
-          if (entry.callback.alive) entry.callback.dispose();
-          this.timers.delete(entry.id);
-        } else {
-          // Interval: reschedule
-          entry.dueTime += entry.interval;
         }
 
         const afterCallback = await flushMicrotasks();
@@ -290,5 +326,6 @@ export class GuestTimers {
     this.timers.clear();
     this.nextId = 1;
     this.virtualNow = 0;
+    this.running = null;
   }
 }

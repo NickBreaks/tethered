@@ -8,6 +8,22 @@ import type { CapabilityStubInfo } from '../capabilities/capability.js';
 export const TIMEOUT_MSG = 'Execution timed out: script exceeded the time limit.';
 
 /**
+ * The fixed cost of each output entry, in characters, in addition to the
+ * characters of its `content`. Each entry uses host memory, also when its
+ * `content` is empty. Thus a guest cannot make an unlimited number of
+ * small entries. The worker and the runner both use this cost.
+ */
+export const OUTPUT_ENTRY_COST = 64;
+
+/**
+ * The maximum length of the `error` of a run, in UTF-16 code units. The
+ * guest controls this string, and the output limit does not apply to it.
+ * The worker cuts the error before it posts `done`. The runner does not
+ * trust the worker, thus it also applies this limit.
+ */
+export const MAX_ERROR_CHARS = 10_000;
+
+/**
  * Per-run snapshot of one registered capability, sent to the JS worker.
  * The worker installs RPC bridge functions for enabled host-backed
  * capabilities. It supplies `timer` natively in the worker. It installs
@@ -30,6 +46,16 @@ export type JsMainToWorkerMsg =
       runId: number;
       code: string;
       timeoutMs: number;
+      /**
+       * The output limit of the run, in characters, over all entries. Each
+       * entry costs the characters (UTF-16 code units) of its `content`
+       * plus `OUTPUT_ENTRY_COST`. When an entry makes the total more than
+       * this limit, the runner drops it and all later entries of the
+       * run. The runner does not trust the worker, thus it applies this
+       * rule itself. The worker uses the same rule to stop the posts of
+       * output that the runner drops.
+       */
+      maxOutputChars: number;
       capabilities: JsCapabilitySnapshot[];
     }
   | { type: 'cap-result'; callId: number; ok: boolean; value?: unknown; error?: string };

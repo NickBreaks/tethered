@@ -242,6 +242,29 @@ describe('createSandboxRuntime', () => {
     expect((await p).error).toBe('out of memory');
   });
 
+  it('passes the jsMaxOutputChars option to the JS runner', async () => {
+    const spawned = spawnEach();
+    expect(() => create({ jsWorkerFactory, jsMaxOutputChars: 0 })).toThrow(RangeError);
+    const rt = create({ jsWorkerFactory, jsMaxOutputChars: 4 });
+    const booted = rt.js.initialize();
+    spawned[0].simulate({ type: 'ready' });
+    await booted;
+    const p = rt.js.execute('x');
+    await flush();
+    const [run] = spawned[0].posted.filter((m) => m.type === 'run');
+    expect(run.maxOutputChars).toBe(4);
+    spawned[0].simulate({
+      type: 'output',
+      runId: run.runId,
+      entry: { type: 'log', content: 'hello', timestamp: 1 },
+    });
+    spawned[0].simulate({ type: 'done', runId: run.runId, success: true, timedOut: false });
+    expect((await p).output.map((e) => e.content)).toEqual([
+      '[no capabilities enabled]',
+      'Output limit reached (4 characters). The runner dropped the remaining output.',
+    ]);
+  });
+
   it('timeouts are plain options/properties', () => {
     const rt = build();
     expect(rt.js.timeoutMs).toBe(1234);

@@ -71,6 +71,31 @@ describe('ProxyAuth', () => {
     });
   });
 
+  describe('setToken() validation', () => {
+    it.each<[string, string]>([
+      ['a line feed', 'ab\ncd'],
+      ['a carriage return', 'ab\rcd'],
+      ['a NUL', 'ab\u0000cd'],
+      ['an inner space', 'ab cd'],
+      ['a character that is not ASCII', 'abé'],
+    ])('throws a TypeError and keeps the old token for a token with %s', (_name, token) => {
+      service.setToken('old');
+      expect(() => service.setToken(token)).toThrow(TypeError);
+      expect(service.authHeader()).toBe('Bearer old');
+    });
+
+    it('the TypeError message does not contain the token', () => {
+      expect(() => service.setToken('secret\nvalue')).toThrow(
+        /^Proxy token must contain only visible ASCII characters\.$/,
+      );
+    });
+
+    it('authHeader() returns null for an invalid token written directly to sessionStorage', () => {
+      sessionStorage.setItem('cors_proxy_auth_token', 'ab\r\ncd');
+      expect(service.authHeader()).toBeNull();
+    });
+  });
+
   describe('clearToken() and invalidate()', () => {
     it('clearToken removes the sessionStorage entry', () => {
       service.setToken('x');

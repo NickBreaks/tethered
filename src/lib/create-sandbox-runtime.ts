@@ -26,6 +26,12 @@ export interface SandboxRuntimeOptions {
   jsConcurrency?: JsRunnerOptions['concurrency'];
   /** Replace the JS worker every N runs. Off by default. */
   jsRecycleAfterRuns?: number;
+  /**
+   * The output limit of each JS run, in characters. Each entry costs its
+   * characters plus a fixed cost of 64 characters. Defaults to 1048576.
+   * It must be a safe integer greater than 0.
+   */
+  jsMaxOutputChars?: number;
   /** Respawn the JS worker and retry once on heap exhaustion. Defaults to `true`. */
   jsRecoverExhaustion?: boolean;
   /**
@@ -66,7 +72,8 @@ export interface SandboxRuntime {
  * if the worker fails to load.
  * Throws if `options.runners` has a `js` key or `initialMode` is unknown.
  * Throws a `RangeError` if `timeoutMs` or `jsBootTimeoutMs` is not a
- * usable time limit.
+ * usable time limit, or if `jsMaxOutputChars` is not a safe integer
+ * greater than 0.
  */
 export function createSandboxRuntime(options: SandboxRuntimeOptions): SandboxRuntime {
   const extra = options.runners ?? {};
@@ -82,6 +89,7 @@ export function createSandboxRuntime(options: SandboxRuntimeOptions): SandboxRun
     recycleAfterRuns: options.jsRecycleAfterRuns,
     recoverExhaustion: options.jsRecoverExhaustion,
     bootTimeoutMs: options.jsBootTimeoutMs,
+    maxOutputChars: options.jsMaxOutputChars,
   });
   // The facade throws if `initialMode` is unknown.
   const facade = new RuntimeFacade({ js, ...extra }, options.initialMode ?? 'js');

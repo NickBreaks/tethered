@@ -14,9 +14,11 @@ import {
   FetchCapability,
   JsRunner,
   TimerCapability,
+  type OutputEntry,
   type ProxyAuth,
   type SandboxCapability,
 } from '../index.js';
+import { OUTPUT_ENTRY_COST } from '../lib/js/worker-protocol.js';
 import { defaultJsWorkerFactory } from './default-worker-factories.js';
 
 const SUPERSEDED = 'Execution superseded by a newer run.';
@@ -137,6 +139,25 @@ describe('JsRunner on a real Worker', () => {
     );
     expect(result.success).toBe(true);
     expect(result.output.map((e) => e.content)).toEqual(['[hang, echo enabled]', 'x', '7']);
+  }, 20_000);
+
+  it('for (;;) console.log() keeps a maximum of maxOutputChars / OUTPUT_ENTRY_COST entries', async () => {
+    const streamed: OutputEntry[] = [];
+    const off = runner.onOutput((e) => streamed.push(e));
+    const result = await runner.execute('for (;;) console.log()', { timeoutMs: 2000 });
+    off();
+    expect(result.timedOut).toBe(true);
+    const max = Math.floor(1_048_576 / OUTPUT_ENTRY_COST);
+    const logs = (output: OutputEntry[]) => output.filter((e) => e.type === 'log');
+    expect(logs(result.output).length).toBeLessThanOrEqual(max);
+    expect(logs(streamed).length).toBeLessThanOrEqual(max);
+    expect(result.output).toContainEqual(
+      expect.objectContaining({
+        type: 'system',
+        content: 'Output limit reached (1048576 characters). The runner dropped the remaining output.',
+      }),
+    );
+    expect(streamed).toEqual(result.output);
   }, 20_000);
 });
 

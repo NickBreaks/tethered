@@ -19,17 +19,29 @@ First release.
   - `'supersede'` (default) or `'queue'` concurrency;
   - periodic replacement of the worker;
   - recovery when the heap has no more memory.
+- Limits on host memory, outside the memory limit of the engine:
+  - an output limit for each run (`maxOutputChars`, default 1048576
+    characters). Each entry costs its characters plus a fixed cost of 64
+    characters, thus empty entries also count. The runner drops the
+    output after the limit. The worker also stops its posts at the limit.
+  - a maximum of 10000 pending guest timers for each run. A clear
+    removes its timer at once.
+  - a maximum of 10000 characters for the `error` of each run. The
+    worker and the runner both apply it. The runner keeps a copy of the
+    characters, thus the full error string does not stay in host memory.
 - Host calls look synchronous to the guest. They also work with `await`,
   in promise jobs and in timer callbacks.
 - The host does not trust the worker. It checks the shape of every
-  message. It answers host calls only for enabled capabilities and
-  declared methods. It sends replies only to the worker and run that
+  message. It answers host calls only for declared methods of the
+  capabilities that were enabled when the run started. It sends replies only to the worker and run that
   asked.
 - `RuntimeFacade` with a pluggable runner map (`runners` option).
 - Capabilities:
   - `FetchCapability`: direct or through a CORS proxy, with optional
     `allowHosts` / `denyHosts` and a body size limit
     (`maxResponseBytes`).
+  - `ProxyAuth.setToken` accepts only visible ASCII characters, so the
+    token is always a valid header value.
   - `StorageCapability`, with `LocalStorageBackend` (default) or
     `MapStorageBackend`.
   - `DiskCapability`, with `IndexedDBDiskBackend` (default) or

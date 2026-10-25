@@ -1,10 +1,13 @@
 import { createValue } from '../shared/readable-value.js';
 import { createEmitter } from '../shared/emitter.js';
+import { copyPrefix } from '../shared/copy-prefix.js';
 import type { CapabilityStore } from '../capabilities/capability-store.js';
-import type { CapabilityStubInfo } from '../capabilities/capability.js';
+import type { CapabilityStubInfo, SandboxCapability } from '../capabilities/capability.js';
 import type { OutputEntry, ExecutionResult } from '../shared/sandbox-types.js';
 import type { CodeRunner, ExecuteOptions } from '../shared/code-runner.js';
 import {
+  MAX_ERROR_CHARS,
+  OUTPUT_ENTRY_COST,
   TIMEOUT_MSG,
   type JsCapabilitySnapshot,
   type JsMainToWorkerMsg,
@@ -15,6 +18,8 @@ import { checkWorkerMessage } from './check-worker-message.js';
 const ABORT_MSG = 'Execution aborted.';
 const SUPERSEDED_MSG = 'Execution superseded by a newer run.';
 const NOT_READY_MSG = 'The JS worker is not ready.';
+const outputLimitMsg = (max: number): string =>
+  `Output limit reached (${max} characters). The runner dropped the remaining output.`;
 
 /**
  * Grace period added to timeoutMs for the main-thread backstop timer.
@@ -27,6 +32,8 @@ const NOT_READY_MSG = 'The JS worker is not ready.';
 const BACKSTOP_GRACE_MS = 2000;
 
 const DEFAULT_BOOT_TIMEOUT_MS = 30_000;
+
+const DEFAULT_MAX_OUTPUT_CHARS = 1_048_576;
 
 /** The largest delay that `setTimeout` accepts. A larger delay fires at once. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -48,6 +55,12 @@ function checkTimeLimit(name: string, value: unknown, grace: number): number {
   const problem = timeLimitProblem(name, value, grace);
   if (problem !== null) throw new RangeError(problem);
   return value as number;
+}
+
+/** Returns `value` when it is a safe integer greater than 0. Else throws a `RangeError`. */
+function checkCount(name: string, value: unknown): number {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
+  throw new RangeError(`${name} must be a safe integer greater than 0 (got ${String(value)}).`);
 }
 
 /**
@@ -102,7 +115,9 @@ export interface JsRunnerOptions {
    * When the worker reports that its heap is spent, respawn the worker and
    * retry the run once on the fresh one. Only the worker can report this,
    * from signals that the guest cannot forge. The error text of the guest
-   * never causes a retry. Defaults to `true`.
+   * never causes a retry. A run that called `invokeHost()` of a capability
+   * is not retried, because a retry does its side effects again. The
+   * worker is still replaced. Defaults to `true`.
    */
   recoverExhaustion?: boolean;
   /**
@@ -113,6 +128,18 @@ export interface JsRunnerOptions {
    * the constructor throws a `RangeError`.
    */
   bootTimeoutMs?: number;
+  /**
+   * The output limit of each run, in characters. Each entry costs the
+   * characters (UTF-16 code units) of its `content` plus a fixed cost of
+   * 64 characters. Thus the default limit keeps a maximum of 16384
+   * entries. All entries that the worker sends for the run count. The
+   * system entries of the runner do not count. When an entry makes the
+   * total more than the limit, the runner drops it and all later output of
+   * the run. It adds one system entry in their place. The run continues.
+   * Defaults to 1048576. It must be a safe integer greater than 0. Else the
+   * constructor throws a `RangeError`.
+   */
+  maxOutputChars?: number;
 }
 
 /** What `onRun` reports about the run that just started. */
@@ -122,10 +149,14 @@ export interface RunInfo {
   timeoutMs: number;
 }
 
-/** A settled run, and whether the worker reported that its heap is spent. */
+/**
+ * A settled run, whether the worker reported that its heap is spent, and
+ * whether the run called `invokeHost()` of a capability.
+ */
 interface RunOutcome {
   result: ExecutionResult;
   exhausted: boolean;
+  calledHost: boolean;
 }
 
 interface ActiveJsRun {
@@ -135,7 +166,14 @@ interface ActiveJsRun {
   startTime: number;
   resolve: (outcome: RunOutcome) => void;
   backstopHandle: ReturnType<typeof setTimeout>;
-  enabledCaps: { cleanup?(): void | Promise<void> }[];
+  /** The capabilities that were enabled when the run started. */
+  enabledCaps: SandboxCapability[];
+  /** Set when a guest call of this run reached `invokeHost()`. */
+  calledHost: boolean;
+  /** The cost of the worker output that the runner kept for this run, in characters. */
+  outputChars: number;
+  /** Set when the run reached its output limit. Then the runner drops all output from the worker. */
+  outputFull: boolean;
 }
 
 /**
@@ -198,6 +236,7 @@ export class JsRunner implements CodeRunner {
   readonly #recycleAfterRuns: number;
   readonly #recoverExhaustion: boolean;
   readonly #bootTimeoutMs: number;
+  readonly #maxOutputChars: number;
 
   #worker: Worker | null = null;
   #runSeq = 0;
@@ -226,6 +265,10 @@ export class JsRunner implements CodeRunner {
       'bootTimeoutMs',
       options.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS,
       0,
+    );
+    this.#maxOutputChars = checkCount(
+      'maxOutputChars',
+      options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS,
     );
   }
 
@@ -407,7 +450,7 @@ export class JsRunner implements CodeRunner {
     const worker = this.#worker;
     this.#runsSinceSpawn++;
 
-    const { result, exhausted } = await new Promise<RunOutcome>((resolve) => {
+    const { result, exhausted, calledHost } = await new Promise<RunOutcome>((resolve) => {
       const backstopHandle = setTimeout(
         () => this.#kill(runId, 'timeout'),
         timeoutMs + BACKSTOP_GRACE_MS,
@@ -420,12 +463,16 @@ export class JsRunner implements CodeRunner {
         resolve,
         backstopHandle,
         enabledCaps: enabled,
+        calledHost: false,
+        outputChars: 0,
+        outputFull: false,
       };
       const msg: JsMainToWorkerMsg = {
         type: 'run',
         runId,
         code,
         timeoutMs,
+        maxOutputChars: this.#maxOutputChars,
         capabilities,
       };
       worker.postMessage(msg);
@@ -436,7 +483,8 @@ export class JsRunner implements CodeRunner {
 
     // Recover only when the worker of this run reported a spent heap.
     // Otherwise, a kill already replaced the worker and reported its own
-    // failure.
+    // failure. Retry only a run without host calls: a retry does the side
+    // effects of those calls again.
     if (
       this.#recoverExhaustion &&
       exhausted &&
@@ -446,7 +494,7 @@ export class JsRunner implements CodeRunner {
       !this.#disposed
     ) {
       this.#replaceWorker(result.error ?? 'exhausted');
-      if (!retried) return this.#executeNow(code, timeoutMs, tag, ticket, true);
+      if (!retried && !calledHost) return this.#executeNow(code, timeoutMs, tag, ticket, true);
     }
     return result;
   }
@@ -553,10 +601,7 @@ export class JsRunner implements CodeRunner {
       case 'init-error':
         return;
       case 'output':
-        if (this.#activeRun?.runId === msg.runId) {
-          this.#activeRun.output.push(msg.entry);
-          this.#output.emit(msg.entry);
-        }
+        if (this.#activeRun?.runId === msg.runId) this.#addOutput(this.#activeRun, msg.entry);
         return;
       case 'cap-call':
         void this.#dispatchCapCall(worker, msg);
@@ -567,6 +612,31 @@ export class JsRunner implements CodeRunner {
     }
   }
 
+  /**
+   * Keeps an entry from the worker, in the output limit of the run. Each
+   * entry costs its characters plus `OUTPUT_ENTRY_COST`. The first entry
+   * that makes the total more than the limit, and all entries after it,
+   * are dropped. One system entry tells about the drop.
+   */
+  #addOutput(run: ActiveJsRun, entry: OutputEntry): void {
+    if (run.outputFull) return;
+    const cost = entry.content.length + OUTPUT_ENTRY_COST;
+    if (cost > this.#maxOutputChars - run.outputChars) {
+      run.outputFull = true;
+      const notice: OutputEntry = {
+        type: 'system',
+        content: outputLimitMsg(this.#maxOutputChars),
+        timestamp: Date.now(),
+      };
+      run.output.push(notice);
+      this.#output.emit(notice);
+      return;
+    }
+    run.outputChars += cost;
+    run.output.push(entry);
+    this.#output.emit(entry);
+  }
+
   async #dispatchCapCall(
     worker: Worker,
     msg: Extract<JsWorkerToMainMsg, { type: 'cap-call' }>,
@@ -574,9 +644,16 @@ export class JsRunner implements CodeRunner {
     // Ignore calls from a run that ended. A reply goes to the wrong run.
     if (this.#activeRun?.runId !== msg.runId) return;
     // Only the host's own enabled set counts, never what the worker claims.
-    const cap = this.#registry.isEnabled(msg.capability)
-      ? this.#registry.getCapability(msg.capability)
-      : undefined;
+    // The capability must be enabled when the run started and when the call
+    // arrives, as the same object. Thus a capability that the host enables
+    // or replaces during a run is available only from the next run.
+    const started = this.#activeRun.enabledCaps.find((c) => c.name === msg.capability);
+    const cap =
+      started !== undefined &&
+      this.#registry.isEnabled(msg.capability) &&
+      this.#registry.getCapability(msg.capability) === started
+        ? started
+        : undefined;
     let reply: JsMainToWorkerMsg;
     if (!cap || typeof cap.invokeHost !== 'function') {
       reply = {
@@ -595,6 +672,7 @@ export class JsRunner implements CodeRunner {
         error: `capability '${msg.capability}' has no method '${msg.method}'`,
       };
     } else {
+      this.#activeRun.calledHost = true;
       try {
         const value = await cap.invokeHost(msg.method, msg.args);
         reply = { type: 'cap-result', callId: msg.callId, ok: true, value };
@@ -637,7 +715,8 @@ export class JsRunner implements CodeRunner {
 
   #completeRun(msg: Extract<JsWorkerToMainMsg, { type: 'done' }>): void {
     if (!this.#activeRun || this.#activeRun.runId !== msg.runId) return;
-    const { output, startTime, resolve, backstopHandle, enabledCaps } = this.#activeRun;
+    const { output, startTime, resolve, backstopHandle, enabledCaps, calledHost } =
+      this.#activeRun;
     clearTimeout(backstopHandle);
     this.#activeRun = null;
     this.#isRunning.set(false);
@@ -650,11 +729,13 @@ export class JsRunner implements CodeRunner {
       result: {
         success: msg.success,
         output,
-        ...(msg.error !== undefined ? { error: msg.error } : {}),
+        // A copy, not a slice. A slice can keep the full string alive.
+        ...(msg.error !== undefined ? { error: copyPrefix(msg.error, MAX_ERROR_CHARS) } : {}),
         timedOut: msg.timedOut,
         durationMs: Date.now() - startTime,
       },
       exhausted: msg.exhausted === true,
+      calledHost,
     });
   }
 
@@ -688,6 +769,7 @@ export class JsRunner implements CodeRunner {
         durationMs: Date.now() - startTime,
       },
       exhausted: false,
+      calledHost: false,
     });
   }
 
@@ -726,6 +808,7 @@ export class JsRunner implements CodeRunner {
         durationMs: Date.now() - startTime,
       },
       exhausted: false,
+      calledHost: false,
     });
   }
 

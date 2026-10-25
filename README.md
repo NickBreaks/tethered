@@ -53,8 +53,9 @@ should work, but CI does not test them.
 > Guest JavaScript run by the built-in JS runner, inside a real web
 > `Worker`, cannot read or change host state and cannot cause side
 > effects, except through the capabilities the host registered and
-> enabled for that run. Each run is bounded by its time limit and a
-> per-run memory limit. The claim covers the built-in JS runner only.
+> enabled for that run. Each run is bounded by its time limit (with a
+> 2 s backstop) and a per-run memory limit. The claim covers the
+> built-in JS runner only.
 
 The claim does not include the in-process fallback (for jsdom/SSR tests),
 custom runners or custom capabilities. Read the

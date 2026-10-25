@@ -1,5 +1,8 @@
 import { createValue } from '../shared/readable-value.js';
 
+/** Visible ASCII only, so that the token is always a valid header value. */
+const VALID_TOKEN = /^[\x21-\x7e]+$/;
+
 /** The part of ProxyAuth that capabilities need. Adapters can use it to pass a wrapper. */
 export type ProxyAuthLike = Pick<ProxyAuth, 'proxyBase' | 'authHeader' | 'invalidate'>;
 
@@ -23,6 +26,11 @@ export type ProxyAuthLike = Pick<ProxyAuth, 'proxyBase' | 'authHeader' | 'invali
  *    string (dev mode, same-origin `/proxy/fetch`) does NOT become null.
  *  - `setToken()` removes whitespace at the start and end of the token
  *    before it stores the token.
+ *  - A token has only visible ASCII characters (0x21–0x7E). `setToken()`
+ *    refuses other tokens, and `authHeader()` ignores them. Thus a token
+ *    is always a valid header value. Else `fetch()` can throw an error
+ *    whose message contains the header value, and that message goes to
+ *    the guest.
  */
 export class ProxyAuth {
   private static readonly TOKEN_KEY = 'cors_proxy_auth_token';
@@ -43,14 +51,18 @@ export class ProxyAuth {
 
   authHeader(): string | null {
     const token = sessionStorage.getItem(ProxyAuth.TOKEN_KEY);
-    if (token === null || token === '') {
+    if (token === null || token === '' || !VALID_TOKEN.test(token)) {
       return null;
     }
     return `Bearer ${token}`;
   }
 
+  /** Throws a `TypeError` if the trimmed token has a character that is not visible ASCII. */
   setToken(token: string): void {
     const trimmed = token.trim();
+    if (trimmed !== '' && !VALID_TOKEN.test(trimmed)) {
+      throw new TypeError('Proxy token must contain only visible ASCII characters.');
+    }
     sessionStorage.setItem(ProxyAuth.TOKEN_KEY, trimmed);
     this.#tokenInvalid.set(false);
   }

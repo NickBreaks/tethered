@@ -261,6 +261,24 @@ describe('FetchCapability', () => {
     expect(init.headers['X-Proxy-Authorization']).toBe(`Bearer ${TOKEN}`);
   });
 
+  it('the proxy POST refuses redirects, so the token header cannot follow one', async () => {
+    const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
+    globalThis.fetch = spy;
+
+    const cap = new FetchCapability(
+      makeStubProxyAuth({
+        proxyBase: () => 'https://proxy.example.com',
+        authHeader: () => `Bearer ${TOKEN}`,
+      }),
+    );
+    injectCap(vm, cap);
+
+    await evalAndDump(`fetch('https://api.example.com/data').status;`);
+
+    const [, init] = spy.mock.calls[0];
+    expect(init.redirect).toBe('error');
+  });
+
   it('token string NOT in the body field of the proxy POST', async () => {
     const spy = vi.fn().mockResolvedValue(mockOkResponse('ok'));
     globalThis.fetch = spy;
@@ -321,7 +339,7 @@ describe('FetchCapability', () => {
   it('401 from proxy -> invalidate() called + error thrown', async () => {
     const invalidate = vi.fn();
     globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response('unauthorized', { status: 401 }),
+      new Response('unauthorized', { status: 401, headers: { 'X-Proxy-Error': 'unauthorized' } }),
     );
 
     const cap = new FetchCapability(
@@ -338,6 +356,29 @@ describe('FetchCapability', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(val).toBe('fetch failed: CORS proxy rejected the token. Re-enter a valid token.');
+  });
+
+  it('a 401 that the proxy relays from the destination goes to the guest and keeps the token', async () => {
+    const invalidate = vi.fn();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('login required', { status: 401 }),
+    );
+
+    const cap = new FetchCapability(
+      makeStubProxyAuth({
+        proxyBase: () => '',
+        authHeader: () => `Bearer ${TOKEN}`,
+        invalidate,
+      }),
+    );
+    injectCap(vm, cap);
+
+    const val = await evalAndDump(
+      `var r = fetch('https://api.example.com/data'); [r.status, r.text()].join(' ');`,
+    );
+
+    expect(val).toBe('401 login required');
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it('missing token with proxy enabled throws the missing-token error', async () => {

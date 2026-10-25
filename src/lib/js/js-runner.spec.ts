@@ -9,6 +9,7 @@ import { DiskCapability, MapDiskBackend } from '../capabilities/disk-capability.
 import { TimerCapability } from '../capabilities/timer-capability.js';
 import type { SandboxCapability } from '../capabilities/capability.js';
 import type { OutputEntry } from '../shared/sandbox-types.js';
+import { OUTPUT_ENTRY_COST } from './worker-protocol.js';
 
 const stubProxyAuth = {
   proxyBase: () => null,
@@ -753,4 +754,78 @@ describe('JsRunner', () => {
       );
     });
   });
+});
+
+describe('JsRunner output limit (in-process worker)', () => {
+  let runner: JsRunner;
+
+  beforeAll(async () => {
+    runner = new JsRunner(new CapabilityStore(), {
+      workerFactory: createJsWorkerFactory({ allowInProcess: true }),
+      // Three entries of 30 characters fit. A fourth entry does not fit.
+      maxOutputChars: 100 + 3 * OUTPUT_ENTRY_COST,
+    });
+    await runner.initialize();
+  });
+
+  afterAll(() => {
+    runner.dispose();
+  });
+
+  it('keeps the output in the limit, adds one system entry and the run continues', async () => {
+    const streamed: OutputEntry[] = [];
+    const off = runner.onOutput((e) => streamed.push(e));
+    const result = await runner.execute(`
+      let n = 0;
+      for (let i = 0; i < 1000; i++) { console.log('x'.repeat(30)); n++; }
+      n
+    `);
+    off();
+    expect(result.success).toBe(true);
+    expect(result.output.map((e) => e.type)).toEqual(['system', 'log', 'log', 'log', 'system']);
+    expect(result.output.at(-1)?.content).toBe(
+      `Output limit reached (${100 + 3 * OUTPUT_ENTRY_COST} characters). The runner dropped the remaining output.`,
+    );
+    expect(streamed).toEqual(result.output);
+  });
+
+  it('gives the next run a new limit', async () => {
+    const result = await runner.execute("console.log('ok'); 1 + 1");
+    expect(logsOf(result.output)).toEqual(['ok']);
+    expect(resultsOf(result.output)).toEqual(['2']);
+  });
+});
+
+describe('JsRunner default output limit (in-process worker)', () => {
+  let runner: JsRunner;
+
+  beforeAll(async () => {
+    runner = new JsRunner(new CapabilityStore(), {
+      workerFactory: createJsWorkerFactory({ allowInProcess: true }),
+      timeoutMs: 1000,
+    });
+    await runner.initialize();
+  });
+
+  afterAll(() => {
+    runner.dispose();
+  });
+
+  it('keeps a maximum of maxOutputChars / OUTPUT_ENTRY_COST empty entries', async () => {
+    const streamed: OutputEntry[] = [];
+    const off = runner.onOutput((e) => streamed.push(e));
+    const result = await runner.execute('for (;;) console.log()');
+    off();
+    expect(result.timedOut).toBe(true);
+    const max = Math.floor(1_048_576 / OUTPUT_ENTRY_COST);
+    expect(logsOf(result.output).length).toBeLessThanOrEqual(max);
+    expect(logsOf(streamed).length).toBeLessThanOrEqual(max);
+    expect(result.output).toContainEqual(
+      expect.objectContaining({
+        type: 'system',
+        content: 'Output limit reached (1048576 characters). The runner dropped the remaining output.',
+      }),
+    );
+    expect(streamed).toEqual(result.output);
+  }, 10_000);
 });

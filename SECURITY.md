@@ -5,12 +5,13 @@
 > Guest JavaScript run by the built-in JS runner, inside a real web
 > `Worker`, cannot read or change host state and cannot cause side
 > effects, except through the capabilities the host registered and
-> enabled for that run. Each run is bounded by its time limit and a
-> per-run memory limit. The claim covers the built-in JS runner only.
+> enabled for that run. Each run is bounded by its time limit (with a
+> 2 s backstop) and a per-run memory limit. The claim covers the
+> built-in JS runner only.
 
 The claim does not include:
 
-- the in-process fallback (`allowInProcess`);
+- the in-process host (`InProcessJsWorker`, also through `allowInProcess`);
 - runners and capabilities that you write yourself;
 - bugs in the browser or the WebAssembly engine;
 - denial of service within the time and memory limits.

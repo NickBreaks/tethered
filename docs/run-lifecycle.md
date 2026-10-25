@@ -49,7 +49,8 @@ the top level to `createSandboxRuntime()`:
 | --- | --- | --- | --- |
 | `concurrency` | `jsConcurrency` | `'supersede'` | `'supersede'`: an overlapping run replaces the current run, on a fresh worker (refer to the subsequent text). `'queue'`: each run starts after all earlier runs settle (finish, fail, time out or abort). |
 | `recycleAfterRuns` | `jsRecycleAfterRuns` | off | After N runs on one worker, the next run first replaces the worker. |
-| `recoverExhaustion` | `jsRecoverExhaustion` | `true` | If the worker reports that its heap is spent (refer to the subsequent text), the runner replaces the worker and tries the run one more time. If the second try fails in the same way, the runner replaces the worker again and returns that failure. |
+| `maxOutputChars` | `jsMaxOutputChars` | `1048576` | The output limit of each run, in characters. Each entry costs the characters (UTF-16 code units) of its `content` plus a fixed cost of 64 characters. Thus the default limit keeps a maximum of 16384 entries. All entries from the worker count. The system entries of the runner do not count. The runner drops the entry that goes over the limit and all later output of the run. In their place, it adds one system entry: `Output limit reached (N characters). The runner dropped the remaining output.` The run continues. The value must be a safe integer greater than 0. Else the constructor throws a `RangeError`. The `error` of a run has a separate limit of 10000 characters. |
+| `recoverExhaustion` | `jsRecoverExhaustion` | `true` | If the worker reports that its heap is spent (refer to the subsequent text), the runner replaces the worker and tries the run one more time. It does not try again when the run called `invokeHost()` of a capability, because a second try does those side effects again. If the second try fails in the same way, the runner replaces the worker again and returns that failure. |
 
 **Spent heap.** The worker sets the `exhausted` flag of its `done`
 message only for signals that the guest cannot forge:
@@ -61,7 +62,11 @@ message only for signals that the guest cannot forge:
 
 The error text alone never causes a retry. Thus a guest that throws
 `new Error('out of memory')` or overflows its stack does not run two
-times.
+times. A run that called `invokeHost()` of a capability also does not run
+two times. The runner replaces the worker and returns the failure. Thus a
+fetch, a storage write or a disk write never occurs two times because of a
+retry. A host call that the host refused before `invokeHost()` (a disabled
+capability or an unknown method) does not prevent the retry.
 
 JS-only subscriptions and state:
 

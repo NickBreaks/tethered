@@ -10,6 +10,8 @@ import { serialize } from '../lib/shared/serialize.js';
 import type { OutputEntry } from '../lib/shared/sandbox-types.js';
 import type { CapabilityStubInfo } from '../lib/capabilities/capability.js';
 import {
+  MAX_ERROR_CHARS,
+  OUTPUT_ENTRY_COST,
   TIMEOUT_MSG,
   type JsCapabilitySnapshot,
   type JsMainToWorkerMsg,
@@ -96,8 +98,25 @@ export class JsWorkerHost {
   }
 
   async #run(msg: Extract<JsMainToWorkerMsg, { type: 'run' }>): Promise<void> {
-    const { runId } = msg;
+    const { runId, maxOutputChars } = msg;
+    // The output limit: the same rule as the runner (worker-protocol.ts).
+    // Each entry costs its characters plus OUTPUT_ENTRY_COST. The worker
+    // posts the first entry over the limit, cut so that its cost is one
+    // more than the remaining budget. Thus the runner sees the overflow and
+    // adds its system entry. Then the worker posts no more output for the
+    // run, but it still posts `done`.
+    let outputChars = 0;
+    let outputFull = false;
     const emit = (entry: OutputEntry): void => {
+      if (outputFull) return;
+      const remaining = maxOutputChars - outputChars;
+      if (entry.content.length + OUTPUT_ENTRY_COST > remaining) {
+        outputFull = true;
+        const keep = Math.max(0, remaining - OUTPUT_ENTRY_COST + 1);
+        entry = { ...entry, content: entry.content.slice(0, keep) };
+      } else {
+        outputChars += entry.content.length + OUTPUT_ENTRY_COST;
+      }
       this.post({ type: 'output', runId, entry });
     };
     const outcome = await this.#execute(msg, emit);
@@ -119,7 +138,11 @@ export class JsWorkerHost {
       runId,
       success: outcome.success,
       timedOut: outcome.timedOut,
-      ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+      // The guest controls the error. Cut it before the post, so that the
+      // full string is not copied to the main thread.
+      ...(outcome.error !== undefined
+        ? { error: outcome.error.slice(0, MAX_ERROR_CHARS) }
+        : {}),
       ...(outcome.exhausted ? { exhausted: true } : {}),
     });
   }
