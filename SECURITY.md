@@ -1,15 +1,23 @@
 # Security policy
 
-## What is claimed
+## Security goal
+
+Caution: no independent party has reviewed or audited tethered. The
+tests and the reviews of the maintainer examine the goal, but they cannot
+prove it. Do not use tethered as the only barrier between hostile code
+and data or credentials that you must keep safe. Reviews and reports of
+escapes are welcome.
+
+tethered has this security goal:
 
 > Guest JavaScript run by the built-in JS runner, inside a real web
 > `Worker`, cannot read or change host state and cannot cause side
 > effects, except through the capabilities the host registered and
 > enabled for that run. Each run is bounded by its time limit (with a
-> 2 s backstop) and a per-run memory limit. The claim covers the
+> 2 s backstop) and a per-run memory limit. The goal covers the
 > built-in JS runner only.
 
-The claim does not include:
+The goal does not include:
 
 - the in-process host (`InProcessJsWorker`, also through `allowInProcess`);
 - runners and capabilities that you write yourself;
@@ -45,4 +53,4 @@ Include:
 Also use the private report for an escape from QuickJS, the WASM runtime
 or the browser, and tell the upstream project. The maintainer will reply
 to the report, work on a fix, and agree a disclosure date with you. For
-other issues outside the claim, open a usual bug report.
+other issues outside the goal, open a usual bug report.

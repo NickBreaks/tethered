@@ -14,8 +14,9 @@ Thank you for your help.
 1. Read [Development](docs/development.md) for the commands and the test
    rules.
 2. Add a spec that fails without your change.
-3. Run `npm run lint`, `npm run typecheck`, `npm test` and
-   `npm run test:integration`. All must pass.
+3. Run `npm run format`. Then run `npm run lint`, `npm run format:check`,
+   `npm run typecheck`, `npm test` and `npm run test:integration`. All
+   must pass.
 4. Write docs and code comments in the [writing style](docs/writing-style.md).
 5. Add an entry for each change in the API or behavior to
    [CHANGELOG.md](CHANGELOG.md).

@@ -63,6 +63,6 @@ sentence worse only to replace a word.
   titles and labels.
 - Keep "MUST" and "SHOULD" in the [proxy protocol](proxy-protocol.md).
   They are requirement keywords.
-- Do not change the wording of the security claim in `README.md`,
+- Do not change the wording of the security goal in `README.md`,
   `SECURITY.md` and [threat-model.md](threat-model.md) unless the meaning
   stays the same.

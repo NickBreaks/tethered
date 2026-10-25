@@ -3,7 +3,7 @@ import { CapabilityStore, JsRunner } from '../index.js';
 import { createJsWorkerFactory, defaultJsWorkerFactory } from './default-worker-factories.js';
 import { InProcessJsWorker } from './in-process-worker.js';
 
-// The in-process fallback is outside the security claim (it shares the
+// The in-process fallback is outside the security goal (it shares the
 // caller's thread), so the default factory only uses it on request.
 
 describe('default JS worker factory', () => {

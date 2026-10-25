@@ -172,7 +172,7 @@ rt.facade.setMode('notes'); // aborts the JS run; an unknown key throws an error
 rt.dispose();               // you must dispose extra runners yourself
 ```
 
-The security claim does not include extra runners.
+The security goal does not include extra runners.
 
 ## Reactive state
 

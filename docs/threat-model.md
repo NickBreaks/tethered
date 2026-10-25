@@ -6,16 +6,21 @@ available to guest code. "Guest" is the untrusted JavaScript that you
 give to `execute()`. "Host" is the page that contains the runtime: the
 main thread, its DOM, its storage and its credentials.
 
-## Security claim
+## Security goal
 
-> **Claim.** Guest JavaScript run by the built-in JS runner, inside a real
+Caution: no independent party has reviewed or audited tethered. The
+tests and the reviews of the maintainer examine the goal, but they cannot
+prove it. Do not use tethered as the only barrier between hostile code
+and data or credentials that you must keep safe.
+
+> **Goal.** Guest JavaScript run by the built-in JS runner, inside a real
 > web `Worker`, cannot read or change host state and cannot cause side
 > effects, except through the capabilities the host registered and enabled
 > for that run. Each run is bounded by its time limit (`timeoutMs`, with a
-> 2 s backstop) and a per-run memory limit. The claim covers the built-in
+> 2 s backstop) and a per-run memory limit. The goal covers the built-in
 > JS runner only.
 
-All of the subsequent text supports that claim or sets its limits.
+All of the subsequent text supports that goal or sets its limits.
 
 ## In scope
 
@@ -181,7 +186,7 @@ in its errors.
 - **The in-process host.** `InProcessJsWorker` runs the engine on the
   calling thread for tests (jsdom, SSR). It has no worker isolation.
   `abort()` cannot interrupt a busy guest, because they use the same
-  thread. The claim does not include it. It is opt-in. A host uses it in
+  thread. The goal does not include it. It is opt-in. A host uses it in
   one of two ways:
   - `createJsWorkerFactory({ allowInProcess: true })`. This factory uses
     `InProcessJsWorker` only when there is no global `Worker`. When

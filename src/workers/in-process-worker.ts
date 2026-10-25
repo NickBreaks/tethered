@@ -9,7 +9,7 @@ type MessageListener = (event: MessageEvent<JsWorkerToMainMsg>) => void;
  * to this when `Worker` is not available (jsdom/SSR test environments).
  * Thus JsRunner continues to work there, with identical protocol
  * semantics. It gives no isolation, so it is opt-in and outside the
- * security claim.
+ * security goal.
  *
  * Limitations compared to a real worker:
  *  - terminate() only detaches the message channel. It cannot preempt a

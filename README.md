@@ -50,14 +50,21 @@ should work, but CI does not test them.
 
 ## Security
 
+Caution: no independent party has reviewed or audited tethered. The
+tests and the reviews of the maintainer examine the goal, but they cannot
+prove it. Do not use tethered as the only barrier between hostile code
+and data or credentials that you must keep safe.
+
+tethered has this security goal:
+
 > Guest JavaScript run by the built-in JS runner, inside a real web
 > `Worker`, cannot read or change host state and cannot cause side
 > effects, except through the capabilities the host registered and
 > enabled for that run. Each run is bounded by its time limit (with a
-> 2 s backstop) and a per-run memory limit. The claim covers the
+> 2 s backstop) and a per-run memory limit. The goal covers the
 > built-in JS runner only.
 
-The claim does not include the in-process fallback (for jsdom/SSR tests),
+The goal does not include the in-process fallback (for jsdom/SSR tests),
 custom runners or custom capabilities. Read the
 [threat model](docs/threat-model.md) before you give guest code access to a
 capability. Report vulnerabilities privately as
@@ -69,13 +76,18 @@ tethered is 0.x. Until 1.0, a minor release (0.x.0) can break the API. A
 patch release (0.x.y) will not break the API. The
 [changelog](CHANGELOG.md) lists every breaking change.
 
+The engine will change before 1.0. A later 0.x release will replace the
+QuickJS engine. This can change guest behaviour that comes from the
+engine, for example error text, stack depth and the built-ins. The
+changelog will list these changes.
+
 ## Docs
 
 - [Usage](docs/usage.md): bundler setup, capabilities, extra runners,
   reactive state.
 - [Run lifecycle](docs/run-lifecycle.md): per-run options, supersede and
   queue, abort, boot and initialization.
-- [Threat model](docs/threat-model.md): the security claim, what is in
+- [Threat model](docs/threat-model.md): the security goal, what is in
   and out of scope, each capability's attack surface.
 - [Proxy protocol](docs/proxy-protocol.md): how `FetchCapability` talks to
   a CORS proxy, and what a proxy must do.
