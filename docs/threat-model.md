@@ -564,12 +564,16 @@ fires. A timer callback that throws
 does not stop the drain. The worker reports the error, the other timers
 fire, and the run fails.
 
-A delay that is not a finite number greater than 0 becomes 0, for
-example `NaN`, `-1` or a string. Time is virtual, so a timer never waits
-in real time. Thus timers cannot slow the host calls of a run. The
-timer functions make no host calls. A timer callback is guest code, so it
-can call the enabled capabilities, as all guest code can. The timers add
-two risks:
+The timer functions convert a delay as a browser does. First, they
+convert it to a number. A string or an object with `valueOf()` gives its
+number. Then they convert the number to a 32-bit integer. Thus they cut
+off a fraction, and a value of 2^31 or more wraps. A delay that is
+negative, `NaN` or infinite becomes 0.
+
+Time is virtual, so a timer never waits in real time. Thus timers cannot
+slow the host calls of a run. The timer functions make no host calls.
+A timer callback is guest code, so it can call the enabled capabilities,
+as all guest code can. The timers add two risks:
 
 - CPU time, for example an interval with a delay of 0. The time limit of
   the run limits it. An interval that the guest does not clear fires
@@ -583,9 +587,9 @@ two risks:
 ## Reporting a vulnerability
 
 Report security issues privately. Do not report them in a public issue.
-The repository is not public yet. When it is public, use its private
-vulnerability reports ("Report a vulnerability" in the Security tab).
-Include:
+Use the private vulnerability reports of the repository: open the
+[**Security** tab](https://github.com/NickBreaks/tethered/security) and
+select **Report a vulnerability**. Include:
 
 - the package version and browser;
 - a minimal guest script and host setup that show the issue;

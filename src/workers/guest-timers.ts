@@ -111,7 +111,20 @@ export class GuestTimers {
         });
         return { value: vm.newNumber(id) };
       });
-      vm.setProp(vm.global, fnName, fn);
+      // The guest global is a guest function that converts the delay as a
+      // browser does: to a number, then to a 32-bit integer. Thus a string
+      // or an object with `valueOf()` gives its number, a fraction is cut
+      // off, and NaN or Infinity gives 0. The conversion is guest code
+      // outside a host function, so a `valueOf()` can call the
+      // capabilities as all guest code can.
+      const wrap = vm.evalCode(
+        `(raw) => ({ ${fnName}(callback, delay = 0) { return raw(callback, +delay | 0); } }).${fnName}`,
+      );
+      const factory = vm.unwrapResult(wrap);
+      const wrapped = vm.unwrapResult(vm.callFunction(factory, vm.undefined, fn));
+      vm.setProp(vm.global, fnName, wrapped);
+      wrapped.dispose();
+      factory.dispose();
       fn.dispose();
     };
 

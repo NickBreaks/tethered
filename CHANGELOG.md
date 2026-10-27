@@ -8,6 +8,10 @@ release can break the API, and a patch release does not.
 
 - Fix: a bigint in the result of `invokeHost()` now gets to the guest as
   a bigint. Before, the guest got `undefined` for it.
+- Fix: `setTimeout` and `setInterval` convert the delay as a browser
+  does: to a number, then to a 32-bit integer. Before, a delay that was
+  not a number became 0, and a fraction stayed. Now `'100'` gives 100,
+  `1.9` gives 1, and a bigint or a symbol delay throws a `TypeError`.
 
 ## 0.1.1 (2026-10-27)
 
