@@ -587,9 +587,9 @@ as all guest code can. The timers add two risks:
 ## Reporting a vulnerability
 
 Report security issues privately. Do not report them in a public issue.
-The repository is not public yet. When it is public, use its private
-vulnerability reports ("Report a vulnerability" in the Security tab).
-Include:
+Use the private vulnerability reports of the repository: open the
+[**Security** tab](https://github.com/NickBreaks/tethered/security) and
+select **Report a vulnerability**. Include:
 
 - the package version and browser;
 - a minimal guest script and host setup that show the issue;
