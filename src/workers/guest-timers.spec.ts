@@ -273,4 +273,115 @@ describe('GuestTimers', () => {
       expect(await evalAndDump('order')).toEqual(['first', 'last']);
     });
   });
+
+  /** Runs the event loop once with the given deadline and interrupt check. */
+  async function drainWith(
+    deadlineMs: number,
+    interrupted: () => boolean = () => false,
+  ): Promise<{ drained: { timedOut: boolean; hadError: boolean }; emitted: OutputEntry[] }> {
+    const emitted: OutputEntry[] = [];
+    const drained = await timers.drainEventLoop(
+      runtime,
+      vm,
+      (e) => emitted.push(e),
+      deadlineMs,
+      interrupted,
+      new SuspendGate(),
+    );
+    return { drained, emitted };
+  }
+
+  describe('delay and clear arguments', () => {
+    it('uses a delay of 0 for a missing, negative, NaN or non-number delay', async () => {
+      await evalAndDump(`
+        globalThis.order = [];
+        setTimeout(() => order.push('five'), 5);
+        setTimeout(() => order.push('missing'));
+        setTimeout(() => order.push('negative'), -10);
+        setTimeout(() => order.push('nan'), NaN);
+        setTimeout(() => order.push('text'), '100');
+        0;
+      `);
+      expect(await drain()).toEqual([]);
+      expect(await evalAndDump('order')).toEqual(['missing', 'negative', 'nan', 'text', 'five']);
+    });
+
+    it('ignores a clear with an id that is not a number or not a pending timer', async () => {
+      const result = await evalAndDump(`
+        globalThis.fired = false;
+        const id = setTimeout(() => { fired = true; }, 5);
+        [clearTimeout(), clearTimeout(String(id)), clearInterval({}), clearTimeout(id + 1000)]
+          .every((r) => r === undefined)
+      `);
+      expect(result).toBe(true);
+      expect(await drain()).toEqual([]);
+      expect(await evalAndDump('fired')).toBe(true);
+    });
+  });
+
+  describe('errors in timer callbacks', () => {
+    it('emits an error entry for a callback that throws, and fires the later timers', async () => {
+      await evalAndDump(`
+        globalThis.order = [];
+        setTimeout(() => { throw new RangeError('bad tick'); }, 1);
+        setTimeout(() => order.push('later'), 2);
+        0;
+      `);
+      const { drained, emitted } = await drainWith(Date.now() + 5000);
+      expect(drained).toEqual({ timedOut: false, hadError: true });
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({ type: 'error' });
+      expect(emitted[0]!.content).toMatch(/^RangeError: bad tick/);
+      expect(await evalAndDump('order')).toEqual(['later']);
+    });
+
+    it('emits the serialized value for a callback that throws a value that is not an error', async () => {
+      await evalAndDump(`setTimeout(() => { throw { code: 7 }; }, 1); 0`);
+      const { drained, emitted } = await drainWith(Date.now() + 5000);
+      expect(drained).toEqual({ timedOut: false, hadError: true });
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({ type: 'error' });
+      expect(JSON.parse(emitted[0]!.content.replace(/^Error: /, ''))).toEqual({ code: 7 });
+    });
+  });
+
+  describe('deadline and interrupt', () => {
+    it('returns timedOut at once when the run is interrupted', async () => {
+      await evalAndDump(`globalThis.fired = false; setTimeout(() => { fired = true; }, 1); 0`);
+      const { drained, emitted } = await drainWith(Date.now() + 5000, () => true);
+      expect(drained).toEqual({ timedOut: true, hadError: false });
+      expect(emitted).toEqual([]);
+      expect(await evalAndDump('fired')).toBe(false);
+    });
+
+    it('stops an interval that never ends when the deadline passes', async () => {
+      await evalAndDump(`globalThis.ticks = 0; setInterval(() => { ticks++; }, 1); 0`);
+      const started = Date.now();
+      const { drained, emitted } = await drainWith(started + 100);
+      expect(drained).toEqual({ timedOut: true, hadError: false });
+      expect(emitted).toEqual([]);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(await evalAndDump('ticks')).toBeGreaterThan(0);
+    });
+
+    it('reports a timeout, not a guest error, when the interrupt handler stops a callback', async () => {
+      const deadline = Date.now() + 100;
+      runtime.setInterruptHandler(() => Date.now() >= deadline);
+      await evalAndDump(`setTimeout(() => { while (true) {} }, 1); 0`);
+      const { drained, emitted } = await drainWith(deadline);
+      runtime.removeInterruptHandler();
+      expect(drained).toEqual({ timedOut: true, hadError: false });
+      expect(emitted).toEqual([]);
+    });
+
+    it('reports a timeout when the interrupt handler stops a promise job', async () => {
+      const deadline = Date.now() + 100;
+      runtime.setInterruptHandler(() => Date.now() >= deadline);
+      await evalAndDump(`Promise.resolve().then(() => { while (true) {} }); 0`);
+      const { drained, emitted } = await drainWith(deadline);
+      runtime.removeInterruptHandler();
+      expect(drained).toEqual({ timedOut: true, hadError: false });
+      expect(emitted).toEqual([]);
+    });
+  });
 }, 30_000);

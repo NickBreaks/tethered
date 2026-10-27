@@ -38,10 +38,10 @@ While tethered is 0.x, only the latest minor release gets security fixes.
 ## Reporting a vulnerability
 
 Report security issues privately. Do not open a public issue, pull
-request or discussion for a vulnerability. The repository is not public
-yet. When it is public, use the GitHub private vulnerability reports:
-open the **Security** tab of the repository and select **Report a
-vulnerability**.
+request or discussion for a vulnerability. Use the GitHub private
+vulnerability reports: open the
+[**Security** tab](https://github.com/NickBreaks/tethered/security) of the
+repository and select **Report a vulnerability**.
 
 Include:
 

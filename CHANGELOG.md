@@ -4,7 +4,7 @@ This file lists all important changes to this project. tethered follows
 [Semantic Versioning](https://semver.org/) with the 0.x rule: a minor
 release can break the API, and a patch release does not.
 
-## 0.1.0 (not released)
+## 0.1.1 (2026-10-27)
 
 First release.
 
