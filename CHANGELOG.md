@@ -6,7 +6,7 @@ release can break the API, and a patch release does not.
 
 ## 0.1.1 (2026-10-27)
 
-First release on npm. Version 0.1.0 was not published.
+First release.
 
 - `createSandboxRuntime()`: connects a capability registry, proxy auth,
   the JS runner and a `RuntimeFacade`, without side effects.
