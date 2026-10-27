@@ -108,7 +108,7 @@ from the stack limit that tethered sets.
   a CORS proxy, and what a proxy must do.
 - [Architecture](docs/architecture.md): entry points, source layout, and
   the function of the worker boundary.
-- [Development](docs/development.md): build, test, lint, release.
+- [Development](docs/development.md): build, test, lint, demo.
 - [Writing style](docs/writing-style.md): the ASD-STE100 rules for docs
   and comments.
 - [Live demo](https://nickbreaks.github.io/tethered/): a small vanilla TS
