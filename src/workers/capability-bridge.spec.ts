@@ -159,6 +159,15 @@ describe('injectCapabilityBridge', () => {
       expect(result).toEqual([true, 6, true, true, ['list', 'inner']]);
     });
 
+    it('gives the guest a bigint for a bigint in a host result', async () => {
+      reply = () => Promise.resolve({ big: 2n ** 70n, list: [-5n] });
+      const result = await evalAndDump(`
+        const r = host.get();
+        [typeof r.big, r.big === 2n ** 70n, typeof r.list[0], r.list[0] === -5n]
+      `);
+      expect(result).toEqual(['bigint', true, 'bigint', true]);
+    });
+
     it('gives the guest an Error with the message of a host Error', async () => {
       reply = () => Promise.reject(new Error('host said no'));
       const result = await evalAndDump(
