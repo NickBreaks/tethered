@@ -292,18 +292,117 @@ describe('GuestTimers', () => {
   }
 
   describe('delay and clear arguments', () => {
-    it('uses a delay of 0 for a missing, negative, NaN or non-number delay', async () => {
+    it('uses a delay of 0 for a missing, negative, NaN or infinite delay', async () => {
       await evalAndDump(`
         globalThis.order = [];
         setTimeout(() => order.push('five'), 5);
         setTimeout(() => order.push('missing'));
         setTimeout(() => order.push('negative'), -10);
         setTimeout(() => order.push('nan'), NaN);
-        setTimeout(() => order.push('text'), '100');
+        setTimeout(() => order.push('infinity'), Infinity);
+        setTimeout(() => order.push('text'), 'abc');
         0;
       `);
       expect(await drain()).toEqual([]);
-      expect(await evalAndDump('order')).toEqual(['missing', 'negative', 'nan', 'text', 'five']);
+      expect(await evalAndDump('order')).toEqual([
+        'missing',
+        'negative',
+        'nan',
+        'infinity',
+        'text',
+        'five',
+      ]);
+    });
+
+    it('converts the delay to a number as a browser does', async () => {
+      await evalAndDump(`
+        globalThis.order = [];
+        setTimeout(() => order.push('number 20'), 20);
+        setTimeout(() => order.push('string 10'), '10');
+        setTimeout(() => order.push('valueOf 15'), { valueOf: () => 15 });
+        setTimeout(() => order.push('string 5'), ' 5 ');
+        setTimeout(() => order.push('null'), null);
+        setTimeout(() => order.push('true'), true);
+        0;
+      `);
+      expect(await drain()).toEqual([]);
+      expect(await evalAndDump('order')).toEqual([
+        'null',
+        'true',
+        'string 5',
+        'string 10',
+        'valueOf 15',
+        'number 20',
+      ]);
+    });
+
+    it('cuts off a fraction and wraps a delay to a 32-bit integer', async () => {
+      await evalAndDump(`
+        globalThis.order = [];
+        setTimeout(() => order.push('1.9'), 1.9);
+        setTimeout(() => order.push('1.1'), 1.1);
+        setTimeout(() => order.push('2 ** 32 + 3'), 2 ** 32 + 3);
+        setTimeout(() => order.push('2 ** 31'), 2 ** 31);
+        setTimeout(() => order.push('2'), 2);
+        0;
+      `);
+      expect(await drain()).toEqual([]);
+      // 1.9 and 1.1 are both 1, thus they fire in call order. 2 ** 31 wraps
+      // to a negative number, thus 0. 2 ** 32 + 3 wraps to 3.
+      expect(await evalAndDump('order')).toEqual(['2 ** 31', '1.9', '1.1', '2', '2 ** 32 + 3']);
+    });
+
+    it('uses the converted delay for each repeat of an interval', async () => {
+      await evalAndDump(`
+        globalThis.order = [];
+        let ticks = 0;
+        const id = setInterval(() => {
+          order.push('interval');
+          if (++ticks === 2) clearInterval(id);
+        }, '4');
+        setTimeout(() => order.push('t6'), 6);
+        0;
+      `);
+      expect(await drain()).toEqual([]);
+      expect(await evalAndDump('order')).toEqual(['interval', 't6', 'interval']);
+    });
+
+    it.each([
+      ['a bigint', '1n'],
+      ['a symbol', 'Symbol()'],
+    ])('throws a TypeError for %s delay, as a browser does', async (_, delay) => {
+      const result = await evalAndDump(`
+        (() => {
+          try {
+            setTimeout(() => {}, ${delay});
+            return 'no error';
+          } catch (e) {
+            return e instanceof TypeError;
+          }
+        })()
+      `);
+      expect(result).toBe(true);
+    });
+
+    it('lets a guest error from valueOf() go to the caller, and adds no timer', async () => {
+      const result = await evalAndDump(`
+        globalThis.fired = false;
+        (() => {
+          try {
+            setTimeout(() => { fired = true; }, { valueOf() { throw new Error('no delay'); } });
+            return 'no error';
+          } catch (e) {
+            return e.message;
+          }
+        })()
+      `);
+      expect(result).toBe('no delay');
+      expect(await drain()).toEqual([]);
+      expect(await evalAndDump('fired')).toBe(false);
+    });
+
+    it.each(['setTimeout', 'setInterval'])('%s has its browser name and length', async (fnName) => {
+      expect(await evalAndDump(`[${fnName}.name, ${fnName}.length]`)).toEqual([fnName, 1]);
     });
 
     it('ignores a clear with an id that is not a number or not a pending timer', async () => {
