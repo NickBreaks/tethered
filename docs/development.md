@@ -7,6 +7,7 @@ You must have Node 20 or later.
 | `npm ci` | Install the locked dependencies. |
 | `npm run build` | Remove `dist/`. Use `tsc` to make the core and `./workers`. Use esbuild to bundle `dist/js-worker.js`. Then run `scripts/verify-build.mjs`. |
 | `npm test` | Run the unit specs with Vitest under jsdom (`vitest.config.ts`). There, the engine runs in-process. |
+| `npm run test:coverage` | Run the unit specs and measure the coverage. The run fails when a value is below its minimum in `vitest.config.ts`. The HTML report goes to `coverage/`. CI runs this command. |
 | `npm run test:integration` | Run the specs in a real browser: headless Chromium through Playwright (`vitest.integration.config.ts`). They use a real `Worker` and a real IndexedDB. |
 | `npm run lint` | Run ESLint (flat config, `eslint.config.js`). This includes the import boundaries between the core and the workers. |
 | `npm run format` | Format the code, JSON, YAML and HTML with Prettier (`.prettierrc.json`). Prettier does not format Markdown. |
