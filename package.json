@@ -46,6 +46,7 @@
     "build": "node scripts/build.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -61,6 +62,7 @@
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.1.12",
+    "@vitest/coverage-v8": "4.1.12",
     "esbuild": "^0.28.2",
     "eslint": "^10.13.0",
     "jsdom": "^27.4.0",
