@@ -203,6 +203,7 @@ function marshal(vm: QuickJSAsyncContext, value: unknown): QuickJSHandle {
   if (typeof value === 'string') return vm.newString(value);
   if (typeof value === 'number') return vm.newNumber(value);
   if (typeof value === 'boolean') return value ? vm.true : vm.false;
+  if (typeof value === 'bigint') return vm.newBigInt(value);
   if (Array.isArray(value)) {
     const arr = vm.newArray();
     value.forEach((v, i) => {

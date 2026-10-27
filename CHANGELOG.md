@@ -4,6 +4,11 @@ This file lists all important changes to this project. tethered follows
 [Semantic Versioning](https://semver.org/) with the 0.x rule: a minor
 release can break the API, and a patch release does not.
 
+## Unreleased
+
+- Fix: a bigint in the result of `invokeHost()` now gets to the guest as
+  a bigint. Before, the guest got `undefined` for it.
+
 ## 0.1.1 (2026-10-27)
 
 First release.
